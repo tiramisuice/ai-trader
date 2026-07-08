@@ -86,16 +86,33 @@ class Database:
                 execution_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_decision_strategy ON decision_log(strategy);
+
+            CREATE TABLE IF NOT EXISTS llm_costs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                cost_usd REAL NOT NULL
+            );
         """)
         conn.commit()
+
+        # Migration: pre-existing trades tables lack the fees column
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        if "fees" not in cols:
+            conn.execute("ALTER TABLE trades ADD COLUMN fees REAL NOT NULL DEFAULT 0")
+            conn.commit()
+            logger.info("Migrated trades table: added fees column")
+
         logger.info("Database initialized at %s", self.db_path)
 
     def save_trade(self, record: TradeRecord) -> int:
         """Save a trade record and return its ID."""
         conn = self._get_conn()
         cursor = conn.execute(
-            """INSERT INTO trades (timestamp, strategy, action, ticker, shares, price, total_cost, reason, portfolio_value_after)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO trades (timestamp, strategy, action, ticker, shares, price, total_cost, fees, reason, portfolio_value_after)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.timestamp.isoformat(),
                 record.strategy,
@@ -104,6 +121,7 @@ class Database:
                 record.shares,
                 record.price,
                 record.total_cost,
+                record.fees,
                 record.reason,
                 record.portfolio_value_after,
             ),
@@ -157,6 +175,7 @@ class Database:
                 shares=row["shares"],
                 price=row["price"],
                 total_cost=row["total_cost"],
+                fees=row["fees"] if "fees" in row.keys() else 0.0,
                 reason=row["reason"],
                 portfolio_value_after=row["portfolio_value_after"],
             )
@@ -224,6 +243,28 @@ class Database:
         )
         conn.commit()
         return cursor.lastrowid or 0
+
+    def save_llm_cost(
+        self, model: str, input_tokens: int, output_tokens: int, cost_usd: float
+    ) -> None:
+        """Persist one LLM call's cost (survives restarts, unlike the in-memory tracker)."""
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT INTO llm_costs (timestamp, model, input_tokens, output_tokens, cost_usd) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), model, input_tokens, output_tokens, cost_usd),
+        )
+        conn.commit()
+
+    def get_llm_cost_summary(self) -> list[dict[str, Any]]:
+        """Total cost and tokens per model, all time."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, "
+            "SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd "
+            "FROM llm_costs GROUP BY model ORDER BY cost_usd DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_latest_decision_log(self, strategy: str) -> dict[str, Any] | None:
         """Get the most recent decision log for a strategy, parsing JSON fields back to dicts."""

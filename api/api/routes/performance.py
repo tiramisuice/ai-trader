@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from api.data.fetch import fetch_history
 from api.db.sqlite import db
 from api.quant.performance import PerformanceMetrics, compute_performance
 from api.trading.portfolio import STARTING_CAPITAL
@@ -86,6 +87,60 @@ def get_tw_performance() -> list[dict[str, Any]]:
 
     results.sort(key=lambda x: x["total_return_pct"], reverse=True)
     return results
+
+
+@router.get("/api/performance/llm-costs")
+def get_llm_costs() -> dict[str, Any]:
+    """LLM spend per model (persisted — survives restarts)."""
+    per_model = db.get_llm_cost_summary()
+    return {
+        "per_model": per_model,
+        "total_cost_usd": round(sum(m["cost_usd"] or 0 for m in per_model), 4),
+        "total_calls": sum(m["calls"] or 0 for m in per_model),
+    }
+
+
+@router.get("/api/performance/benchmark/{strategy}")
+def get_strategy_benchmark(strategy: str) -> dict[str, Any]:
+    """Compare a strategy against buy-and-hold of its market benchmark
+    (SPY for US, 0050.TW for TW) over the same period."""
+    if strategy in STRATEGY_MAP:
+        benchmark_ticker = "SPY"
+    elif strategy in TW_STRATEGY_MAP:
+        benchmark_ticker = "0050.TW"
+    else:
+        raise HTTPException(status_code=404, detail=f"Unknown strategy: {strategy}")
+
+    snapshots = db.get_snapshots(strategy=strategy, limit=10_000)
+    if len(snapshots) < 2:
+        raise HTTPException(status_code=404, detail=f"Not enough history for {strategy}")
+
+    start_value = snapshots[0]["total_value"]
+    end_value = snapshots[-1]["total_value"]
+    start_date = snapshots[0]["timestamp"][:10]
+    end_date = snapshots[-1]["timestamp"][:10]
+    strategy_return_pct = round((end_value / start_value - 1) * 100, 2)
+
+    try:
+        hist = fetch_history(benchmark_ticker, "2y")
+        window = hist.loc[start_date:end_date]
+        if len(window) < 2:
+            raise ValueError(f"no benchmark data in window {start_date}..{end_date}")
+        bench_start = float(window["Close"].iloc[0])
+        bench_end = float(window["Close"].iloc[-1])
+        benchmark_return_pct = round((bench_end / bench_start - 1) * 100, 2)
+    except Exception as e:
+        logger.error("Benchmark fetch failed for %s: %s", benchmark_ticker, e)
+        raise HTTPException(status_code=502, detail=f"Benchmark data unavailable: {e}")
+
+    return {
+        "strategy": strategy,
+        "period": {"start": start_date, "end": end_date},
+        "strategy_return_pct": strategy_return_pct,
+        "benchmark": benchmark_ticker,
+        "benchmark_return_pct": benchmark_return_pct,
+        "alpha_pct": round(strategy_return_pct - benchmark_return_pct, 2),
+    }
 
 
 @router.get("/api/performance/{strategy}")

@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from api.trading.costs import CostModel, cost_model_for_currency
 from api.trading.models import Position, PortfolioState, TradeOrder, TradeRecord
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class SimulatedPortfolio:
         trade_count: int = 0,
         currency: str = "USD",
         starting_capital: float | None = None,
+        cost_model: CostModel | None = None,
     ) -> None:
         self.strategy = strategy
         self.cash = cash
@@ -31,6 +33,8 @@ class SimulatedPortfolio:
         self.trade_count = trade_count
         self.currency = currency
         self.starting_capital = starting_capital if starting_capital is not None else cash
+        # Fees default to the market's real schedule so fills are realistic
+        self.cost_model = cost_model if cost_model is not None else cost_model_for_currency(currency)
 
     def execute_order(self, order: TradeOrder, price: float) -> TradeRecord | None:
         """Execute a trade order at the given price. Returns a TradeRecord or None if rejected."""
@@ -44,12 +48,13 @@ class SimulatedPortfolio:
             return self._execute_sell(order, price)
 
     def _execute_buy(self, order: TradeOrder, price: float) -> TradeRecord | None:
-        total_cost = price * order.shares
+        fees = self.cost_model.for_trade("BUY", order.shares, price).total
+        total_cost = price * order.shares + fees
 
         if total_cost > self.cash:
             logger.warning(
-                "Rejected BUY: %s x%d @ $%.2f = $%.2f exceeds cash $%.2f",
-                order.ticker, order.shares, price, total_cost, self.cash,
+                "Rejected BUY: %s x%d @ $%.2f = $%.2f (incl. $%.2f fees) exceeds cash $%.2f",
+                order.ticker, order.shares, price, total_cost, fees, self.cash,
             )
             return None
 
@@ -57,7 +62,7 @@ class SimulatedPortfolio:
 
         if order.ticker in self.positions:
             pos = self.positions[order.ticker]
-            # Update average cost
+            # Update average cost (fees are capitalized into cost basis)
             old_total = pos.avg_cost * pos.shares
             new_total = old_total + total_cost
             new_shares = pos.shares + order.shares
@@ -68,7 +73,7 @@ class SimulatedPortfolio:
             self.positions[order.ticker] = Position(
                 ticker=order.ticker,
                 shares=order.shares,
-                avg_cost=price,
+                avg_cost=total_cost / order.shares,
                 current_price=price,
             )
 
@@ -76,8 +81,8 @@ class SimulatedPortfolio:
         portfolio_value = self._calc_total_value()
 
         logger.info(
-            "BUY %s x%d @ $%.2f ($%.2f) | cash=$%.2f | total=$%.2f",
-            order.ticker, order.shares, price, total_cost, self.cash, portfolio_value,
+            "BUY %s x%d @ $%.2f ($%.2f incl. $%.2f fees) | cash=$%.2f | total=$%.2f",
+            order.ticker, order.shares, price, total_cost, fees, self.cash, portfolio_value,
         )
 
         return TradeRecord(
@@ -88,6 +93,7 @@ class SimulatedPortfolio:
             shares=order.shares,
             price=price,
             total_cost=total_cost,
+            fees=fees,
             reason=order.reason,
             portfolio_value_after=portfolio_value,
         )
@@ -105,7 +111,8 @@ class SimulatedPortfolio:
             )
             return None
 
-        total_proceeds = price * order.shares
+        fees = self.cost_model.for_trade("SELL", order.shares, price).total
+        total_proceeds = price * order.shares - fees
         self.cash += total_proceeds
 
         pos.shares -= order.shares
@@ -117,8 +124,8 @@ class SimulatedPortfolio:
         portfolio_value = self._calc_total_value()
 
         logger.info(
-            "SELL %s x%d @ $%.2f ($%.2f) | cash=$%.2f | total=$%.2f",
-            order.ticker, order.shares, price, total_proceeds, self.cash, portfolio_value,
+            "SELL %s x%d @ $%.2f ($%.2f net of $%.2f fees) | cash=$%.2f | total=$%.2f",
+            order.ticker, order.shares, price, total_proceeds, fees, self.cash, portfolio_value,
         )
 
         return TradeRecord(
@@ -129,6 +136,7 @@ class SimulatedPortfolio:
             shares=order.shares,
             price=price,
             total_cost=total_proceeds,
+            fees=fees,
             reason=order.reason,
             portfolio_value_after=portfolio_value,
         )

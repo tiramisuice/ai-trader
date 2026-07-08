@@ -5,7 +5,18 @@ from __future__ import annotations
 import pytest
 
 from api.trading.models import TradeOrder
-from api.trading.portfolio import STARTING_CAPITAL, SimulatedPortfolio
+from api.trading.costs import ZERO_COST_MODEL
+from api.trading.portfolio import STARTING_CAPITAL, SimulatedPortfolio as _SimulatedPortfolio
+
+
+def SimulatedPortfolio(*args, **kwargs):
+    """These tests verify accounting mechanics with no fees; the fee
+    schedule itself is covered in test_costs.py."""
+    kwargs.setdefault("cost_model", ZERO_COST_MODEL)
+    return _SimulatedPortfolio(*args, **kwargs)
+
+
+SimulatedPortfolio.from_dict = _SimulatedPortfolio.from_dict
 
 
 class TestBuy:

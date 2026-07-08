@@ -55,10 +55,14 @@ class TechnicalSignals:
     score: int  # -10 to +10
     signal: str  # "strong_buy", "buy", "neutral", "sell", "strong_sell"
 
-def compute_signals(ticker: str) -> TechnicalSignals | None:
-    """Compute all technical signals for a ticker. Returns None on failure."""
+def compute_signals(ticker: str, hist=None) -> TechnicalSignals | None:
+    """Compute all technical signals for a ticker. Returns None on failure.
+
+    Pass `hist` (an OHLCV frame from the batch downloader) to avoid a
+    per-ticker network fetch."""
     try:
-        hist = _fetch_history(ticker, "1y")  # Need 200+ days for SMA200
+        if hist is None:
+            hist = _fetch_history(ticker, "1y")  # Need 200+ days for SMA200
         if hist.empty or len(hist) < 20:
             return None
 
@@ -200,11 +204,16 @@ def compute_signals(ticker: str) -> TechnicalSignals | None:
         logger.error("Failed to compute signals for %s: %s", ticker, e)
         return None
 
-def compute_batch_signals(tickers: list[str]) -> dict[str, TechnicalSignals]:
-    """Compute signals for multiple tickers. Skips failures."""
+def compute_batch_signals(
+    tickers: list[str], hist_map: dict | None = None
+) -> dict[str, TechnicalSignals]:
+    """Compute signals for multiple tickers. Skips failures.
+
+    `hist_map` ({ticker: OHLCV frame}) reuses batch-downloaded history;
+    missing tickers fall back to a per-ticker fetch."""
     results = {}
     for t in tickers:
-        sig = compute_signals(t)
+        sig = compute_signals(t, hist=(hist_map or {}).get(t))
         if sig:
             results[t] = sig
     return results

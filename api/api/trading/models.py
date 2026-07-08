@@ -49,7 +49,8 @@ class TradeRecord(BaseModel):
     ticker: str
     shares: int
     price: float
-    total_cost: float
+    total_cost: float  # cash impact: gross + fees on BUY, net proceeds on SELL
+    fees: float = 0.0  # commission + tax + slippage included in total_cost
     reason: str
     portfolio_value_after: float
 

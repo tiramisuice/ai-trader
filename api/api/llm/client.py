@@ -201,17 +201,7 @@ class LLMClient:
 
     def _track_anthropic(self, spec: ModelSpec, resp: Any) -> None:
         usage = resp.usage
-        input_tokens = usage.input_tokens
-        output_tokens = usage.output_tokens
-        cost = (
-            input_tokens * spec.input_cost_per_m / 1_000_000
-            + output_tokens * spec.output_cost_per_m / 1_000_000
-        )
-        cost_tracker.record(spec.key, input_tokens, output_tokens, cost)
-        logger.info(
-            "LLM call: model=%s in=%d out=%d cost=$%.4f",
-            spec.key, input_tokens, output_tokens, cost,
-        )
+        self._track(spec, usage.input_tokens, usage.output_tokens)
 
     # ===================================================================
     # OpenAI implementations
@@ -258,13 +248,20 @@ class LLMClient:
         usage = resp.usage
         if usage is None:
             return
-        input_tokens = usage.prompt_tokens or 0
-        output_tokens = usage.completion_tokens or 0
+        self._track(spec, usage.prompt_tokens or 0, usage.completion_tokens or 0)
+
+    def _track(self, spec: ModelSpec, input_tokens: int, output_tokens: int) -> None:
         cost = (
             input_tokens * spec.input_cost_per_m / 1_000_000
             + output_tokens * spec.output_cost_per_m / 1_000_000
         )
         cost_tracker.record(spec.key, input_tokens, output_tokens, cost)
+        try:
+            from api.db.sqlite import db
+
+            db.save_llm_cost(spec.key, input_tokens, output_tokens, cost)
+        except Exception as e:
+            logger.warning("Failed to persist LLM cost: %s", e)
         logger.info(
             "LLM call: model=%s in=%d out=%d cost=$%.4f",
             spec.key, input_tokens, output_tokens, cost,

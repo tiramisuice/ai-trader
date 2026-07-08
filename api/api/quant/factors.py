@@ -67,11 +67,14 @@ def _safe_get(info: dict, key: str) -> float | None:
         return None
 
 
-def _fetch_raw_factors(ticker: str) -> dict | None:
-    """Fetch raw factor data for a single stock from yfinance."""
+def _fetch_raw_factors(ticker: str, hist=None) -> dict | None:
+    """Fetch raw factor data for a single stock from yfinance.
+
+    Pass `hist` from the batch downloader to skip the per-ticker history fetch."""
     try:
         info = fetch_info(ticker)
-        hist = fetch_history(ticker, "1y")
+        if hist is None:
+            hist = fetch_history(ticker, "1y")
 
         if hist.empty or len(hist) < 60:
             logger.warning("Insufficient history for %s (%d rows)", ticker, len(hist))
@@ -194,10 +197,13 @@ def _classify_factor_signal(composite: float) -> str:
         return "neutral"
 
 
-def compute_factor_scores(tickers: list[str]) -> dict[str, FactorScores]:
+def compute_factor_scores(
+    tickers: list[str], hist_map: dict | None = None
+) -> dict[str, FactorScores]:
     """Compute factor scores for a batch of stocks.
 
     Factors are cross-sectionally z-scored (ranked among the batch).
+    `hist_map` ({ticker: OHLCV frame}) reuses batch-downloaded history.
     """
     cache_key = "factors_" + "_".join(sorted(tickers))
     cached = _get_cached(cache_key)
@@ -208,7 +214,7 @@ def compute_factor_scores(tickers: list[str]) -> dict[str, FactorScores]:
     raw_data: list[dict] = []
     valid_tickers: list[str] = []
     for t in tickers:
-        data = _fetch_raw_factors(t)
+        data = _fetch_raw_factors(t, hist=(hist_map or {}).get(t))
         if data is not None:
             raw_data.append(data)
             valid_tickers.append(t)

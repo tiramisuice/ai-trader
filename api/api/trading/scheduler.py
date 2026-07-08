@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from api.data.batch import fetch_batch_history
 from api.data.market import get_portfolio_prices
 from api.data.news import get_news_summary
 from api.db.sqlite import db
@@ -249,8 +250,18 @@ class TradingScheduler:
         ticker_list = list(all_tickers)
         logger.info("[%s] Computing quant signals for %d tickers...", market.upper(), len(ticker_list))
 
+        # One batch download reused by signals + factors (vs 2 fetches/ticker)
+        hist_map = fetch_batch_history(ticker_list, "1y")
+
+        # One canonical price map per cycle: the LLM report, stop-loss checks,
+        # and order fills all use the same prices (they used to diverge).
+        cycle_prices = get_portfolio_prices(ticker_list)
+
         # Technical signals (RSI, MACD, Bollinger, etc.)
-        signals = compute_batch_signals(ticker_list)
+        signals = compute_batch_signals(ticker_list, hist_map)
+        for t, sig in signals.items():
+            if cycle_prices.get(t):
+                sig.price = cycle_prices[t]
         signal_report = format_batch_signal_cards(signals)
 
         # Initialize variables (may be overwritten in try blocks)
@@ -263,7 +274,7 @@ class TradingScheduler:
 
         # Factor model (Value, Momentum, Quality, Size, Volatility)
         try:
-            factor_scores = compute_factor_scores(ticker_list)
+            factor_scores = compute_factor_scores(ticker_list, hist_map)
             factor_report = format_factor_report(factor_scores)
         except Exception as e:
             logger.warning("Factor computation failed: %s", e)
@@ -398,18 +409,12 @@ class TradingScheduler:
         for strategy in strategies:
             strategy_market_data[strategy.name] = full_report
 
-        # Update prices for held positions
-        held_tickers = set()
+        # Update prices for held positions (held tickers are part of the
+        # cycle universe, so cycle_prices covers them)
         for s in strategies:
             portfolio = portfolios.get(s.name)
             if portfolio:
-                held_tickers.update(portfolio.positions.keys())
-        if held_tickers:
-            prices = get_portfolio_prices(list(held_tickers))
-            for s in strategies:
-                portfolio = portfolios.get(s.name)
-                if portfolio:
-                    portfolio.update_prices(prices)
+                portfolio.update_prices(cycle_prices)
 
         # ── Check portfolio health (stop losses + daily loss halt) ─────
         tz = TW_TZ if market == 'tw' else ET
@@ -432,8 +437,7 @@ class TradingScheduler:
             for forced in health.forced_sells:
                 ticker = forced["ticker"]
                 shares = forced["shares"]
-                price_data = get_portfolio_prices([ticker])
-                price = price_data.get(ticker, 0)
+                price = cycle_prices.get(ticker, 0)
                 if price > 0 and shares > 0:
                     order = TradeOrder(action="SELL", ticker=ticker, shares=shares, reason=forced["reason"])
                     record = portfolio.execute_order(order, price)
@@ -484,8 +488,12 @@ class TradingScheduler:
             risk_check_data: dict[str, list] = {"orders_approved": [], "orders_blocked": []}
 
             for order in decision.orders:
-                price_data = get_portfolio_prices([order.ticker])
-                price = price_data.get(order.ticker, 0.0)
+                # Fill at the same price the LLM saw; fall back to a direct
+                # fetch only for tickers outside the cycle universe (e.g. a
+                # SELL of a position the LLM knows but wasn't scanned)
+                price = cycle_prices.get(order.ticker, 0.0)
+                if price <= 0:
+                    price = get_portfolio_prices([order.ticker]).get(order.ticker, 0.0)
                 if price <= 0:
                     continue
 
