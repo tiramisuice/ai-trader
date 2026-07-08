@@ -33,6 +33,10 @@ class Database:
             self._local.conn = sqlite3.connect(self.db_path)
             self._local.conn.row_factory = sqlite3.Row
             self._local.conn.execute("PRAGMA journal_mode=WAL")
+            # US and TW cycles write concurrently; wait instead of raising
+            # "database is locked" and losing the rest of the cycle's writes.
+            self._local.conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn.execute("PRAGMA synchronous=NORMAL")
         return self._local.conn
 
     def init_db(self) -> None:
@@ -175,6 +179,20 @@ class Database:
             }
             for row in reversed(rows)  # Return chronological order
         ]
+
+    def get_first_snapshot_since(self, strategy: str, since_iso: str) -> float | None:
+        """Get the earliest snapshot value at/after `since_iso` (UTC ISO string).
+
+        Used as the start-of-day baseline for the daily-loss circuit breaker.
+        Returns None if no snapshot exists yet in that window.
+        """
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT total_value FROM snapshots WHERE strategy = ? AND timestamp >= ? "
+            "ORDER BY timestamp ASC LIMIT 1",
+            (strategy, since_iso),
+        ).fetchone()
+        return row["total_value"] if row is not None else None
 
     def save_snapshot(self, strategy: str, timestamp: datetime, total_value: float) -> None:
         """Save a portfolio value snapshot."""

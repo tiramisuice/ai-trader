@@ -1,4 +1,9 @@
-"""Trading scheduler that runs strategy cycles during market hours."""
+"""Trading scheduler that runs strategy cycles during market hours.
+
+Cron triggers are intentionally broader than the actual sessions; the
+exchange-calendar guard in `_run_strategies_by_names` filters pre-open /
+post-close fires and holidays.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from api.data.market import get_market_summary, get_portfolio_prices, get_watchlist_data
+from api.data.market import get_portfolio_prices
 from api.data.news import get_news_summary
 from api.db.sqlite import db
 from api.llm.client import LLMClient
@@ -27,10 +32,11 @@ from api.quant.earnings import analyze_earnings_news, format_earnings_report
 from api.quant.anomaly import detect_anomalies, format_anomaly_report
 from api.quant.position_sizing import calculate_position_size
 from api.quant.risk_rules import create_risk_manager, RiskManager
+from api.trading.market_hours import is_market_open
 from api.trading.models import TradeDecision, TradeOrder
 from api.trading.portfolio import STARTING_CAPITAL, SimulatedPortfolio
-from api.trading.strategies import ALL_STRATEGIES, STRATEGY_MAP, TradingStrategy
-from api.trading.strategies_tw import ALL_TW_STRATEGIES, TW_STRATEGY_MAP
+from api.trading.strategies import ALL_STRATEGIES, TradingStrategy
+from api.trading.strategies_tw import ALL_TW_STRATEGIES
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +210,12 @@ class TradingScheduler:
         market = subset[0].market if hasattr(subset[0], 'market') else 'us'
         lock = self._tw_lock if market == 'tw' else self._lock
 
+        # Cron windows are broader than actual sessions (e.g. 9:00 ET fires
+        # pre-open); the calendar guard also covers exchange holidays.
+        if not is_market_open(market):
+            logger.info("[%s] Market closed — skipping scheduled cycle for %s", market.upper(), names)
+            return []
+
         with lock:
             logger.info("Running %s strategies: %s", market.upper(), [s.name for s in subset])
             return self._run_subset(subset, portfolios)
@@ -244,6 +256,10 @@ class TradingScheduler:
         # Initialize variables (may be overwritten in try blocks)
         factor_scores = {}
         insider_signals = {}
+        combined_scores = {}
+        anomalies = []
+        earnings = {}
+        regime = None
 
         # Factor model (Value, Momentum, Quality, Size, Volatility)
         try:
@@ -323,47 +339,32 @@ class TradingScheduler:
             anomaly_report = ""
 
         # ── Build pipeline_data for decision logging ───────────
-        _top_signals = []
-        try:
-            if combined_scores:
-                _top_signals = [
-                    {
-                        "ticker": cs.ticker,
-                        "combined_score": round(cs.combined_score, 3),
-                        "signal": cs.signal,
-                        "rank": cs.rank,
-                        "breakdown": {
-                            "technical": round(cs.technical_score, 3),
-                            "factor": round(cs.factor_score, 3),
-                            "insider": round(cs.insider_score, 3),
-                        },
-                        "suggested_weight": round(cs.suggested_weight, 3),
-                        "confidence": round(cs.confidence, 3),
-                    }
-                    for cs in sorted(combined_scores.values(), key=lambda x: x.combined_score, reverse=True)
-                ]
-        except NameError:
-            pass
+        _top_signals = [
+            {
+                "ticker": cs.ticker,
+                "combined_score": round(cs.combined_score, 3),
+                "signal": cs.signal,
+                "rank": cs.rank,
+                "breakdown": {
+                    "technical": round(cs.technical_score, 3),
+                    "factor": round(cs.factor_score, 3),
+                    "insider": round(cs.insider_score, 3),
+                },
+                "suggested_weight": round(cs.suggested_weight, 3),
+                "confidence": round(cs.confidence, 3),
+            }
+            for cs in sorted(combined_scores.values(), key=lambda x: x.combined_score, reverse=True)
+        ]
 
-        _anomalies_data: list[dict[str, Any]] = []
-        try:
-            if anomalies:
-                _anomalies_data = [
-                    {"ticker": a.ticker, "type": a.alert_type, "severity": a.severity, "message": a.message}
-                    for a in anomalies
-                ]
-        except NameError:
-            pass
+        _anomalies_data: list[dict[str, Any]] = [
+            {"ticker": a.ticker, "type": a.alert_type, "severity": a.severity, "message": a.message}
+            for a in anomalies
+        ]
 
-        _earnings_data: list[dict[str, Any]] = []
-        try:
-            if earnings:
-                _earnings_data = [
-                    {"ticker": t, "sentiment": e.sentiment, "guidance": e.forward_guidance}
-                    for t, e in earnings.items() if e.has_recent_earnings
-                ]
-        except NameError:
-            pass
+        _earnings_data: list[dict[str, Any]] = [
+            {"ticker": t, "sentiment": e.sentiment, "guidance": e.forward_guidance}
+            for t, e in earnings.items() if e.has_recent_earnings
+        ]
 
         pipeline_data = {
             "regime": {
@@ -410,7 +411,14 @@ class TradingScheduler:
                 if portfolio:
                     portfolio.update_prices(prices)
 
-        # ── Check portfolio health (stop losses) ───────────────
+        # ── Check portfolio health (stop losses + daily loss halt) ─────
+        tz = TW_TZ if market == 'tw' else ET
+        day_start_utc = (
+            datetime.now(tz)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+        )
+        daily_halted: dict[str, bool] = {}
         for strategy in strategies:
             portfolio = portfolios[strategy.name]
             style = strategy.style if hasattr(strategy, 'style') else 'balanced'
@@ -419,9 +427,7 @@ class TradingScheduler:
                 t: {"shares": p.shares, "avg_cost": p.avg_cost, "current_price": p.current_price}
                 for t, p in portfolio.positions.items()
             }
-            health = risk_mgr.check_portfolio_health(
-                positions_dict, portfolio.total_value, portfolio.starting_capital
-            )
+            health = risk_mgr.check_portfolio_health(positions_dict)
             # Execute forced sells (stop losses)
             for forced in health.forced_sells:
                 ticker = forced["ticker"]
@@ -434,6 +440,17 @@ class TradingScheduler:
                     if record:
                         record.id = db.save_trade(record)
                         logger.warning("[%s] FORCED SELL %s: %s", strategy.name, ticker, forced["reason"])
+
+            # Daily-loss circuit breaker: measured from today's first snapshot
+            # (exchange-local day). SELLs stay allowed; BUYs are blocked below.
+            day_start_value = db.get_first_snapshot_since(strategy.name, day_start_utc.isoformat())
+            daily = risk_mgr.check_daily_loss(day_start_value, portfolio.total_value)
+            daily_halted[strategy.name] = not daily.approved
+            if not daily.approved:
+                logger.warning(
+                    "[%s] DAILY LOSS HALT: %s",
+                    strategy.name, "; ".join(v.message for v in daily.violations),
+                )
 
         # ── Layer 2: LLM DECISIONS ─────────────────────────────
         decisions: dict[str, TradeDecision] = {}
@@ -474,6 +491,21 @@ class TradingScheduler:
 
                 if order.action == "BUY":
                     original_shares = order.shares
+
+                    # Hard gates the LLM cannot bypass: daily-loss halt + watchlist
+                    block_reason = None
+                    if daily_halted.get(strategy_name):
+                        block_reason = "DAILY_LOSS_LIMIT: buying halted for the rest of the day"
+                    elif strategy and strategy.watchlist is not None and order.ticker not in strategy.watchlist:
+                        block_reason = f"WATCHLIST: {order.ticker} is not on this strategy's watchlist"
+                    if block_reason:
+                        trades_blocked.append(f"BLOCKED BUY {order.ticker}: {block_reason}")
+                        risk_check_data["orders_blocked"].append({
+                            "action": order.action, "ticker": order.ticker,
+                            "shares": order.shares, "reason": block_reason,
+                        })
+                        logger.info("[%s] BLOCKED: BUY %s — %s", strategy_name, order.ticker, block_reason)
+                        continue
 
                     # Risk check before buying
                     positions_dict = {
@@ -551,7 +583,13 @@ class TradingScheduler:
                     trades_this_cycle += 1
 
             db.save_portfolio_state(strategy_name, json.dumps(portfolio.to_dict()))
-            db.save_snapshot(strategy_name, datetime.now(timezone.utc), portfolio.total_value)
+            # Skip the snapshot if any held position has no valid price —
+            # a failed quote would otherwise record a fake portfolio collapse.
+            if all(p.current_price > 0 for p in portfolio.positions.values()):
+                db.save_snapshot(strategy_name, datetime.now(timezone.utc), portfolio.total_value)
+            else:
+                bad = [t for t, p in portfolio.positions.items() if p.current_price <= 0]
+                logger.warning("[%s] Skipping snapshot: missing prices for %s", strategy_name, bad)
 
             # Save decision log
             llm_input_data = {
@@ -610,263 +648,19 @@ class TradingScheduler:
 
         return results
 
-    def run_cycle(self) -> list[dict[str, Any]]:
-        """Run one full trading cycle for all US strategies."""
-        with self._lock:
-            return self._run_cycle_inner()
-
     def run_cycle_now(self) -> list[dict[str, Any]]:
         """Manually trigger a US cycle — uses full quant pipeline + decision logging."""
         if not self._portfolios:
             self.initialize()
-        return self._run_subset(ALL_STRATEGIES, self._portfolios)
-
-    def run_tw_cycle(self) -> list[dict[str, Any]]:
-        """Run one full trading cycle for all TW strategies."""
-        with self._tw_lock:
-            return self._run_tw_cycle_inner()
+        with self._lock:
+            return self._run_subset(ALL_STRATEGIES, self._portfolios)
 
     def run_tw_cycle_now(self) -> list[dict[str, Any]]:
         """Manually trigger a TW cycle — uses full quant pipeline + decision logging."""
         if not self._tw_portfolios:
             self.initialize()
-        return self._run_subset(ALL_TW_STRATEGIES, self._tw_portfolios)
-
-    def _run_cycle_inner(self) -> list[dict[str, Any]]:
-        logger.info("=== Starting trading cycle #%d ===", self._cycle_count + 1)
-
-        # Gather default market data (for strategies without a watchlist)
-        market_summary = get_market_summary()
-
-        # Build per-strategy market data: use watchlist data if available
-        strategy_market_data: dict[str, str] = {}
-        for strategy in ALL_STRATEGIES:
-            if strategy.watchlist is not None:
-                strategy_market_data[strategy.name] = get_watchlist_data(strategy.watchlist)
-            else:
-                strategy_market_data[strategy.name] = market_summary
-
-        # Collect all held tickers across portfolios
-        all_tickers: set[str] = set()
-        for portfolio in self._portfolios.values():
-            all_tickers.update(portfolio.positions.keys())
-
-        # Gather news for portfolio tickers + market
-        news_tickers = list(all_tickers) if all_tickers else ["NVDA", "TSLA", "AAPL", "MSFT", "META", "GOOGL"]
-        news = get_news_summary(news_tickers)
-
-        if all_tickers:
-            prices = get_portfolio_prices(list(all_tickers))
-            for portfolio in self._portfolios.values():
-                portfolio.update_prices(prices)
-
-        # Run all strategies in parallel
-        decisions: dict[str, TradeDecision] = {}
-        errors: dict[str, str] = {}
-
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {}
-            for strategy in ALL_STRATEGIES:
-                portfolio = self._portfolios[strategy.name]
-                state = portfolio.get_state()
-                future = executor.submit(
-                    self._run_strategy,
-                    strategy,
-                    state,
-                    strategy_market_data[strategy.name],
-                    news,
-                )
-                futures[future] = strategy.name
-
-            for future in as_completed(futures):
-                name = futures[future]
-                try:
-                    decision = future.result()
-                    decisions[name] = decision
-                except Exception as e:
-                    logger.error("Strategy %s failed: %s", name, e, exc_info=True)
-                    errors[name] = str(e)
-
-        # Execute trades sequentially
-        results: list[dict[str, Any]] = []
-
-        for strategy_name, decision in decisions.items():
-            portfolio = self._portfolios[strategy_name]
-            trades_executed: list[dict[str, Any]] = []
-
-            for order in decision.orders:
-                # Fetch current price for the ticker
-                prices = get_portfolio_prices([order.ticker])
-                price = prices.get(order.ticker, 0.0)
-
-                if price <= 0:
-                    logger.warning(
-                        "Skipping order for %s: no valid price", order.ticker
-                    )
-                    continue
-
-                record = portfolio.execute_order(order, price)
-                if record:
-                    record_id = db.save_trade(record)
-                    record.id = record_id
-                    trades_executed.append(record.model_dump(mode="json"))
-
-            # Save portfolio state
-            state = portfolio.get_state()
-            db.save_portfolio_state(strategy_name, json.dumps(portfolio.to_dict()))
-
-            # Save snapshot
-            now = datetime.now(timezone.utc)
-            db.save_snapshot(strategy_name, now, state.total_value)
-
-            results.append(
-                {
-                    "strategy": strategy_name,
-                    "analysis": decision.market_analysis,
-                    "reasoning": decision.reasoning,
-                    "orders_requested": len(decision.orders),
-                    "trades_executed": trades_executed,
-                    "portfolio_value": state.total_value,
-                    "return_pct": state.total_return_pct,
-                }
-            )
-
-        # Record errors
-        for strategy_name, error in errors.items():
-            portfolio = self._portfolios[strategy_name]
-            state = portfolio.get_state()
-            results.append(
-                {
-                    "strategy": strategy_name,
-                    "error": error,
-                    "portfolio_value": state.total_value,
-                    "return_pct": state.total_return_pct,
-                }
-            )
-
-        self._cycle_count += 1
-        self._last_cycle_results = results
-        logger.info("=== Trading cycle #%d complete ===", self._cycle_count)
-        return results
-
-    def _run_tw_cycle_inner(self) -> list[dict[str, Any]]:
-        logger.info("=== Starting TW trading cycle #%d ===", self._tw_cycle_count + 1)
-
-        # Gather default market data (for strategies without a watchlist)
-        market_summary = get_market_summary()
-
-        # Build per-strategy market data: use watchlist data if available
-        strategy_market_data: dict[str, str] = {}
-        for strategy in ALL_TW_STRATEGIES:
-            if strategy.watchlist is not None:
-                strategy_market_data[strategy.name] = get_watchlist_data(strategy.watchlist)
-            else:
-                strategy_market_data[strategy.name] = market_summary
-
-        # Collect all held tickers across TW portfolios
-        all_tickers: set[str] = set()
-        for portfolio in self._tw_portfolios.values():
-            all_tickers.update(portfolio.positions.keys())
-
-        # Gather news for portfolio tickers + market
-        news_tickers = list(all_tickers) if all_tickers else ["2330.TW", "2317.TW", "2454.TW", "2882.TW", "2881.TW"]
-        news = get_news_summary(news_tickers)
-
-        if all_tickers:
-            prices = get_portfolio_prices(list(all_tickers))
-            for portfolio in self._tw_portfolios.values():
-                portfolio.update_prices(prices)
-
-        # Run all TW strategies in parallel
-        decisions: dict[str, TradeDecision] = {}
-        errors: dict[str, str] = {}
-
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {}
-            for strategy in ALL_TW_STRATEGIES:
-                portfolio = self._tw_portfolios[strategy.name]
-                state = portfolio.get_state()
-                future = executor.submit(
-                    self._run_strategy,
-                    strategy,
-                    state,
-                    strategy_market_data[strategy.name],
-                    news,
-                )
-                futures[future] = strategy.name
-
-            for future in as_completed(futures):
-                name = futures[future]
-                try:
-                    decision = future.result()
-                    decisions[name] = decision
-                except Exception as e:
-                    logger.error("TW Strategy %s failed: %s", name, e, exc_info=True)
-                    errors[name] = str(e)
-
-        # Execute trades sequentially
-        results: list[dict[str, Any]] = []
-
-        for strategy_name, decision in decisions.items():
-            portfolio = self._tw_portfolios[strategy_name]
-            trades_executed: list[dict[str, Any]] = []
-
-            for order in decision.orders:
-                # Fetch current price for the ticker
-                prices = get_portfolio_prices([order.ticker])
-                price = prices.get(order.ticker, 0.0)
-
-                if price <= 0:
-                    logger.warning(
-                        "Skipping TW order for %s: no valid price", order.ticker
-                    )
-                    continue
-
-                record = portfolio.execute_order(order, price)
-                if record:
-                    record_id = db.save_trade(record)
-                    record.id = record_id
-                    trades_executed.append(record.model_dump(mode="json"))
-
-            # Save portfolio state
-            state = portfolio.get_state()
-            db.save_portfolio_state(strategy_name, json.dumps(portfolio.to_dict()))
-
-            # Save snapshot
-            now = datetime.now(timezone.utc)
-            db.save_snapshot(strategy_name, now, state.total_value)
-
-            results.append(
-                {
-                    "strategy": strategy_name,
-                    "market": "tw",
-                    "analysis": decision.market_analysis,
-                    "reasoning": decision.reasoning,
-                    "orders_requested": len(decision.orders),
-                    "trades_executed": trades_executed,
-                    "portfolio_value": state.total_value,
-                    "return_pct": state.total_return_pct,
-                }
-            )
-
-        # Record errors
-        for strategy_name, error in errors.items():
-            portfolio = self._tw_portfolios[strategy_name]
-            state = portfolio.get_state()
-            results.append(
-                {
-                    "strategy": strategy_name,
-                    "market": "tw",
-                    "error": error,
-                    "portfolio_value": state.total_value,
-                    "return_pct": state.total_return_pct,
-                }
-            )
-
-        self._tw_cycle_count += 1
-        self._last_tw_cycle_results = results
-        logger.info("=== TW Trading cycle #%d complete ===", self._tw_cycle_count)
-        return results
+        with self._tw_lock:
+            return self._run_subset(ALL_TW_STRATEGIES, self._tw_portfolios)
 
     def _run_strategy(
         self,

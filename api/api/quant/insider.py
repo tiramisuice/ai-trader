@@ -3,9 +3,10 @@
 from __future__ import annotations
 import logging
 import time
-import yfinance as yf
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+from api.data.fetch import fetch_insider_purchases, fetch_insider_transactions
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +39,13 @@ class InsiderSignal:
 def _fetch_insider_data(ticker: str) -> InsiderSignal:
     """Fetch insider trading data for a single stock from yfinance."""
     try:
-        stock = yf.Ticker(ticker)
-
         # Try insider_transactions first (more detailed)
         net_buys = 0
         details: list[str] = []
         cutoff = datetime.now() - timedelta(days=30)
 
         try:
-            transactions = stock.insider_transactions
+            transactions = fetch_insider_transactions(ticker)
             if transactions is not None and not transactions.empty:
                 for _, row in transactions.iterrows():
                     # Check date — yfinance may return 'Start Date' or 'startDate'
@@ -114,7 +113,7 @@ def _fetch_insider_data(ticker: str) -> InsiderSignal:
 
         # Try insider_purchases as fallback
         try:
-            purchases = stock.insider_purchases
+            purchases = fetch_insider_purchases(ticker)
             if purchases is not None and not purchases.empty:
                 for _, row in purchases.iterrows():
                     for col in ["Shares", "shares", "Purchases"]:

@@ -126,8 +126,6 @@ class RiskManager:
     def check_portfolio_health(
         self,
         positions: dict,  # {ticker: {shares, avg_cost, current_price}}
-        portfolio_value: float,
-        starting_capital: float,
     ) -> RiskCheckResult:
         """Check portfolio health and identify positions that need forced selling."""
         violations = []
@@ -151,20 +149,39 @@ class RiskManager:
                         "reason": f"STOP LOSS triggered: down {loss_pct:.1%} from avg cost ${avg_cost:.2f}",
                     })
 
-        # Rule: Daily loss limit
-        daily_return = (portfolio_value - starting_capital) / starting_capital if starting_capital > 0 else 0
-        if daily_return < -self.max_daily_loss_pct:
-            violations.append(RuleViolation(
-                rule="DAILY_LOSS_LIMIT",
-                message=f"Portfolio down {daily_return:.1%} today (limit: -{self.max_daily_loss_pct:.0%}). HALT TRADING.",
-                action="warning",
-            ))
-
         return RiskCheckResult(
-            approved=len(forced_sells) == 0 and daily_return > -self.max_daily_loss_pct,
+            approved=len(forced_sells) == 0,
             violations=violations,
             forced_sells=forced_sells,
         )
+
+    def check_daily_loss(
+        self,
+        day_start_value: float | None,
+        current_value: float,
+    ) -> RiskCheckResult:
+        """Circuit breaker: halt buying when today's loss exceeds max_daily_loss_pct.
+
+        `day_start_value` is the portfolio value at the start of the trading day
+        (e.g. today's first snapshot). None means no baseline yet — approved.
+        """
+        if not day_start_value or day_start_value <= 0:
+            return RiskCheckResult(approved=True)
+
+        intraday_return = (current_value - day_start_value) / day_start_value
+        if intraday_return < -self.max_daily_loss_pct:
+            return RiskCheckResult(
+                approved=False,
+                violations=[RuleViolation(
+                    rule="DAILY_LOSS_LIMIT",
+                    message=(
+                        f"Portfolio down {intraday_return:.1%} today "
+                        f"(limit: -{self.max_daily_loss_pct:.0%}). Buying halted."
+                    ),
+                    action="block_trade",
+                )],
+            )
+        return RiskCheckResult(approved=True)
 
     def format_risk_report(self, result: RiskCheckResult) -> str:
         """Format risk check result for LLM context."""

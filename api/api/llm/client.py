@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -25,9 +26,15 @@ logger = logging.getLogger(__name__)
 class CostTracker:
     """Thread-safe tracker for LLM token usage and cost."""
 
+    # The process runs for weeks — keep only recent records in memory while
+    # totals accumulate separately so they stay accurate.
+    MAX_RECORDS = 1000
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._records: list[dict[str, Any]] = []
+        self._total_cost = 0.0
+        self._total_tokens = 0
 
     def record(
         self,
@@ -46,16 +53,20 @@ class CostTracker:
                     "cost_usd": cost_usd,
                 }
             )
+            if len(self._records) > self.MAX_RECORDS:
+                del self._records[: -self.MAX_RECORDS]
+            self._total_cost += cost_usd
+            self._total_tokens += input_tokens + output_tokens
 
     @property
     def total_cost(self) -> float:
         with self._lock:
-            return sum(r["cost_usd"] for r in self._records)
+            return self._total_cost
 
     @property
     def total_tokens(self) -> int:
         with self._lock:
-            return sum(r["input_tokens"] + r["output_tokens"] for r in self._records)
+            return self._total_tokens
 
     @property
     def records(self) -> list[dict[str, Any]]:
@@ -73,8 +84,10 @@ cost_tracker = CostTracker()
 
 def _make_all_required(schema: dict) -> dict:
     """Recursively make all properties required and add
-    additionalProperties: false (OpenAI strict structured output)."""
-    schema = dict(schema)
+    additionalProperties: false (OpenAI strict structured output).
+
+    Deep-copies the input so the caller's schema is never mutated."""
+    schema = copy.deepcopy(schema)
 
     if schema.get("type") == "object" and "properties" in schema:
         schema["required"] = list(schema["properties"].keys())
@@ -129,22 +142,6 @@ class LLMClient:
             self._openai = openai.OpenAI(api_key=api_key)
         return self._openai
 
-    # ------- plain text completion -------
-
-    def complete(
-        self,
-        model_key: str,
-        system: str,
-        prompt: str,
-        max_tokens: int = 4096,
-    ) -> str:
-        spec = get_model(model_key)
-
-        if spec.provider == "anthropic":
-            return self._complete_anthropic(spec, system, prompt, max_tokens)
-        else:
-            return self._complete_openai(spec, system, prompt, max_tokens)
-
     # ------- structured JSON completion -------
 
     def complete_json(
@@ -166,18 +163,6 @@ class LLMClient:
     # ===================================================================
     # Anthropic implementations
     # ===================================================================
-
-    def _complete_anthropic(
-        self, spec: ModelSpec, system: str, prompt: str, max_tokens: int
-    ) -> str:
-        resp = self.anthropic_client.messages.create(
-            model=spec.model_id,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        self._track_anthropic(spec, resp)
-        return resp.content[0].text
 
     def _complete_json_anthropic(
         self,
@@ -231,20 +216,6 @@ class LLMClient:
     # ===================================================================
     # OpenAI implementations
     # ===================================================================
-
-    def _complete_openai(
-        self, spec: ModelSpec, system: str, prompt: str, max_tokens: int
-    ) -> str:
-        resp = self.openai_client.chat.completions.create(
-            model=spec.model_id,
-            max_completion_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        self._track_openai(spec, resp)
-        return resp.choices[0].message.content or ""
 
     def _complete_json_openai(
         self,

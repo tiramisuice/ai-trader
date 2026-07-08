@@ -164,11 +164,7 @@ def test_stop_loss_triggered(rm):
     positions = {
         "AAPL": {"shares": 10, "avg_cost": 200.0, "current_price": 160.0},  # -20%
     }
-    result = rm.check_portfolio_health(
-        positions=positions,
-        portfolio_value=96000.0,
-        starting_capital=100000.0,
-    )
+    result = rm.check_portfolio_health(positions=positions)
     assert result.approved is False
     assert len(result.forced_sells) == 1
     assert result.forced_sells[0]["ticker"] == "AAPL"
@@ -182,27 +178,42 @@ def test_stop_loss_not_triggered(rm):
     positions = {
         "AAPL": {"shares": 10, "avg_cost": 200.0, "current_price": 180.0},  # -10%
     }
-    result = rm.check_portfolio_health(
-        positions=positions,
-        portfolio_value=98000.0,
-        starting_capital=100000.0,
-    )
+    result = rm.check_portfolio_health(positions=positions)
     assert len(result.forced_sells) == 0
     stop_loss_violations = [v for v in result.violations if v.rule == "STOP_LOSS"]
     assert len(stop_loss_violations) == 0
 
 
 def test_daily_loss_halt(rm):
-    """Trading should halt when daily loss exceeds limit."""
-    result = rm.check_portfolio_health(
-        positions={},
-        portfolio_value=93000.0,   # Down 7% from starting capital
-        starting_capital=100000.0,
-    )
+    """Buying should halt when today's loss exceeds the limit."""
+    # Down 7% from today's first snapshot (default limit is 5%)
+    result = rm.check_daily_loss(day_start_value=100000.0, current_value=93000.0)
     assert result.approved is False
     halt_violations = [v for v in result.violations if v.rule == "DAILY_LOSS_LIMIT"]
     assert len(halt_violations) == 1
-    assert "HALT" in halt_violations[0].message
+    assert halt_violations[0].action == "block_trade"
+
+
+def test_daily_loss_within_limit(rm):
+    """No halt when today's loss is within the limit."""
+    result = rm.check_daily_loss(day_start_value=100000.0, current_value=97000.0)  # -3%
+    assert result.approved is True
+    assert result.violations == []
+
+
+def test_daily_loss_no_baseline(rm):
+    """No baseline yet today (first cycle of the day) — approved."""
+    assert rm.check_daily_loss(day_start_value=None, current_value=93000.0).approved is True
+    assert rm.check_daily_loss(day_start_value=0.0, current_value=93000.0).approved is True
+
+
+def test_daily_loss_measures_intraday_not_inception(rm):
+    """A portfolio down since inception but flat today must NOT be halted.
+
+    (The old implementation measured from starting capital, which would have
+    halted it forever.)"""
+    result = rm.check_daily_loss(day_start_value=90000.0, current_value=89900.0)  # -0.1% today
+    assert result.approved is True
 
 
 # --- Strategy-specific tests ---

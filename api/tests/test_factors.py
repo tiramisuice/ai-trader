@@ -212,7 +212,8 @@ class TestComputeFactorScores:
         from api.quant.factors import _cache
         _cache.clear()
 
-        with patch("api.quant.factors.yf.Ticker", side_effect=mock_ticker_factory):
+        with patch("api.quant.factors.fetch_info", side_effect=lambda t: mock_ticker_factory(t).info), \
+             patch("api.quant.factors.fetch_history", side_effect=lambda t, p: mock_ticker_factory(t).history()):
             scores = compute_factor_scores(["AAPL", "MSFT", "TSLA"])
 
         assert len(scores) == 3
@@ -254,7 +255,8 @@ class TestComputeFactorScores:
         from api.quant.factors import _cache
         _cache.clear()
 
-        with patch("api.quant.factors.yf.Ticker", side_effect=mock_ticker_factory):
+        with patch("api.quant.factors.fetch_info", side_effect=lambda t: mock_ticker_factory(t).info), \
+             patch("api.quant.factors.fetch_history", side_effect=lambda t, p: mock_ticker_factory(t).history()):
             scores = compute_factor_scores(["A", "B"])
 
         for s in scores.values():
@@ -282,7 +284,8 @@ class TestComputeFactorScores:
         from api.quant.factors import _cache
         _cache.clear()
 
-        with patch("api.quant.factors.yf.Ticker", side_effect=Exception("API error")):
+        with patch("api.quant.factors.fetch_info", side_effect=Exception("API error")), \
+             patch("api.quant.factors.fetch_history", side_effect=Exception("API error")):
             scores = compute_factor_scores(["BAD1", "BAD2"])
 
         assert scores == {}

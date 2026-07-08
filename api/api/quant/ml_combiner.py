@@ -174,8 +174,9 @@ def combine_signals(
             + WEIGHT_INSIDER * scores["insider_norm"]
             + WEIGHT_REGIME * scores["regime_norm"]
         )
-        # Apply regime scaling to the final score
-        combined *= regime_scale
+        # Regime enters only as the weighted term above. Exposure scaling is
+        # applied once, at order execution — multiplying here as well made a
+        # crisis regime compound (0.2 in score × 0.2 on shares × ...).
         # Clamp to [0, 1]
         combined = max(0.0, min(1.0, combined))
         combined_raw[ticker] = combined

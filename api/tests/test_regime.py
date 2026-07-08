@@ -172,12 +172,10 @@ class TestFallbackRegimeDetection:
         returns = np.random.randn(252) * 0.01
         rolling_vol = np.array([np.std(returns[max(0, i - 19):i + 1]) for i in range(252)])
 
-        mock_spy = MagicMock()
         spy_hist = pd.DataFrame({"Close": [450.0]}, index=pd.date_range("2026-03-31", periods=1))
-        mock_spy.history.return_value = spy_hist
 
         with patch("api.quant.regime._fetch_market_data", return_value=(returns, rolling_vol, 420.0, 18.0)):
-            with patch("api.quant.regime.yf.Ticker", return_value=mock_spy):
+            with patch("api.quant.regime.fetch_history", return_value=spy_hist):
                 # Force HMM to fail so we get rule-based
                 with patch("api.quant.regime._detect_regime_hmm", return_value=None):
                     state = detect_regime()

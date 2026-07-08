@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 import logging
-import yfinance as yf
 import numpy as np
 from dataclasses import dataclass
 from typing import Literal
+
+from api.data.fetch import fetch_history as _fetch_history
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,7 @@ class TechnicalSignals:
 def compute_signals(ticker: str) -> TechnicalSignals | None:
     """Compute all technical signals for a ticker. Returns None on failure."""
     try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1y")  # Need 200+ days for SMA200
+        hist = _fetch_history(ticker, "1y")  # Need 200+ days for SMA200
         if hist.empty or len(hist) < 20:
             return None
 
@@ -80,6 +80,9 @@ def compute_signals(ticker: str) -> TechnicalSignals | None:
         rs = gain / loss
         rsi_series = 100 - (100 / (1 + rs))
         rsi_14 = float(rsi_series.iloc[-1]) if len(rsi_series) >= 14 else None
+        if rsi_14 is not None and np.isnan(rsi_14):
+            # 0/0 on a flat series, or too few data points in the window
+            rsi_14 = None
 
         # --- MACD ---
         ema_12 = close.ewm(span=12, adjust=False).mean()

@@ -3,9 +3,10 @@
 from __future__ import annotations
 import logging
 import time
-import yfinance as yf
 import numpy as np
 from dataclasses import dataclass
+
+from api.data.fetch import fetch_history, fetch_info
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +70,8 @@ def _safe_get(info: dict, key: str) -> float | None:
 def _fetch_raw_factors(ticker: str) -> dict | None:
     """Fetch raw factor data for a single stock from yfinance."""
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        hist = stock.history(period="1y")
+        info = fetch_info(ticker)
+        hist = fetch_history(ticker, "1y")
 
         if hist.empty or len(hist) < 60:
             logger.warning("Insufficient history for %s (%d rows)", ticker, len(hist))

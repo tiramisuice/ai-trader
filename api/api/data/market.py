@@ -6,13 +6,16 @@ import logging
 import time
 from typing import Any
 
-import yfinance as yf
+import pandas as pd
+
+from api.data.fetch import fetch_history as _fetch_history, fetch_info as _fetch_info
 
 logger = logging.getLogger(__name__)
 
 # Simple cache: {key: (timestamp, data)}
 _cache: dict[str, tuple[float, Any]] = {}
 _CACHE_TTL = 60  # seconds
+_CACHE_MAX_ENTRIES = 512  # long-running process: evict instead of growing forever
 
 
 def _get_cached(key: str) -> Any | None:
@@ -24,7 +27,26 @@ def _get_cached(key: str) -> Any | None:
 
 
 def _set_cached(key: str, data: Any) -> None:
+    if len(_cache) >= _CACHE_MAX_ENTRIES:
+        now = time.time()
+        expired = [k for k, (ts, _) in _cache.items() if now - ts >= _CACHE_TTL]
+        for k in expired:
+            _cache.pop(k, None)
+        if len(_cache) >= _CACHE_MAX_ENTRIES:
+            _cache.clear()
     _cache[key] = (time.time(), data)
+
+
+def _rsi_14(close: pd.Series) -> float | None:
+    """RSI(14) from a close series. None when there's not enough data."""
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0).rolling(14).mean().iloc[-1]
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean().iloc[-1]
+    if pd.isna(gain) or pd.isna(loss):
+        return None
+    if loss == 0:
+        return 50.0 if gain == 0 else 100.0
+    return 100 - (100 / (1 + gain / loss))
 
 
 def get_price_data(ticker: str) -> dict[str, Any]:
@@ -38,8 +60,7 @@ def get_price_data(ticker: str) -> dict[str, Any]:
         return cached
 
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info or {}
+        info = _fetch_info(ticker)
 
         current_price = info.get("currentPrice") or info.get("regularMarketPrice", 0.0)
         prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose", 0.0)
@@ -81,7 +102,13 @@ def get_portfolio_prices(tickers: list[str]) -> dict[str, float]:
     prices: dict[str, float] = {}
     for ticker in tickers:
         data = get_price_data(ticker)
-        prices[ticker] = data["current_price"]
+        price = data["current_price"]
+        # A failed/zero quote means "unknown", not "worthless" — omit it so
+        # callers keep the last known price instead of marking positions to 0.
+        if price and price > 0:
+            prices[ticker] = price
+        else:
+            logger.warning("No valid price for %s — omitting from price map", ticker)
 
     _set_cached(cache_key, prices)
     return prices
@@ -107,8 +134,7 @@ def get_watchlist_data(tickers: list[str]) -> str:
     lines.append("\nWatchlist Data:")
     for ticker in tickers:
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="1mo")
+            hist = _fetch_history(ticker, "1mo")
             if hist.empty:
                 lines.append(f"  {ticker}: no data")
                 continue
@@ -116,11 +142,7 @@ def get_watchlist_data(tickers: list[str]) -> str:
             price = hist["Close"].iloc[-1]
             sma_20 = hist["Close"].rolling(20).mean().iloc[-1] if len(hist) >= 20 else None
 
-            # RSI calculation
-            delta = hist["Close"].diff()
-            gain = delta.where(delta > 0, 0).rolling(14).mean().iloc[-1]
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean().iloc[-1]
-            rsi = 100 - (100 / (1 + gain / loss)) if loss != 0 else 50
+            rsi = _rsi_14(hist["Close"])
 
             vol = hist["Volume"].iloc[-1]
 
@@ -133,10 +155,11 @@ def get_watchlist_data(tickers: list[str]) -> str:
                 vol_str = str(int(vol))
 
             line = f"  {ticker}: ${price:.2f}"
-            if sma_20 and not (sma_20 != sma_20):  # check for NaN
+            if sma_20 and not pd.isna(sma_20):
                 above = "above" if price > sma_20 else "below"
                 line += f" | SMA20: ${sma_20:.2f} ({above})"
-            line += f" | RSI: {rsi:.0f} | Vol: {vol_str}"
+            line += f" | RSI: {rsi:.0f}" if rsi is not None else " | RSI: N/A"
+            line += f" | Vol: {vol_str}"
             lines.append(line)
         except Exception as e:
             logger.warning("Failed to get watchlist data for %s: %s", ticker, e)
@@ -169,26 +192,22 @@ def get_market_summary() -> str:
     lines.append("\nStock Watchlist:")
     for ticker in watchlist:
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="1mo")
+            hist = _fetch_history(ticker, "1mo")
             if not hist.empty:
                 price = hist["Close"].iloc[-1]
                 sma_20 = hist["Close"].rolling(20).mean().iloc[-1] if len(hist) >= 20 else None
-                # Simple RSI calculation
-                delta = hist["Close"].diff()
-                gain = delta.where(delta > 0, 0).rolling(14).mean().iloc[-1]
-                loss = (-delta.where(delta < 0, 0)).rolling(14).mean().iloc[-1]
-                rsi = 100 - (100 / (1 + gain / loss)) if loss != 0 else 50
+                rsi = _rsi_14(hist["Close"])
                 vol = hist["Volume"].iloc[-1]
 
                 line = f"  {ticker}: ${price:.2f}"
-                if sma_20:
+                if sma_20 and not pd.isna(sma_20):
                     above = "above" if price > sma_20 else "below"
                     line += f" | SMA20: ${sma_20:.2f} ({above})"
-                line += f" | RSI: {rsi:.0f} | Vol: {vol:,.0f}"
+                line += f" | RSI: {rsi:.0f}" if rsi is not None else " | RSI: N/A"
+                line += f" | Vol: {vol:,.0f}"
                 lines.append(line)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to get market summary data for %s: %s", ticker, e)
 
     summary = "Market Summary:\n" + "\n".join(lines)
     _set_cached(cache_key, summary)

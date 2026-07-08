@@ -3,9 +3,10 @@
 from __future__ import annotations
 import logging
 import time
-import yfinance as yf
 import numpy as np
 from dataclasses import dataclass
+
+from api.data.fetch import fetch_history
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,8 @@ def _fetch_market_data(lookback_days: int = 252) -> tuple[np.ndarray, np.ndarray
     Returns (daily_returns, rolling_vol_20d, sma_200, current_vix) or None.
     """
     try:
-        spy = yf.Ticker("SPY")
         # Fetch a bit more data than needed for SMA200
-        hist = spy.history(period="2y")
+        hist = fetch_history("SPY", "2y")
         if hist.empty or len(hist) < lookback_days:
             logger.warning("Insufficient SPY data (%d rows)", len(hist))
             return None
@@ -81,8 +81,7 @@ def _fetch_market_data(lookback_days: int = 252) -> tuple[np.ndarray, np.ndarray
         # VIX
         current_vix = None
         try:
-            vix = yf.Ticker("^VIX")
-            vix_hist = vix.history(period="5d")
+            vix_hist = fetch_history("^VIX", "5d")
             if not vix_hist.empty:
                 current_vix = float(vix_hist["Close"].iloc[-1])
         except Exception:
@@ -234,8 +233,7 @@ def detect_regime(lookback_days: int = 252) -> RegimeState:
     returns, rolling_vol, sma_200, vix = market_data
     spy_price = None
     try:
-        spy = yf.Ticker("SPY")
-        spy_hist = spy.history(period="5d")
+        spy_hist = fetch_history("SPY", "5d")
         if not spy_hist.empty:
             spy_price = float(spy_hist["Close"].iloc[-1])
     except Exception:
