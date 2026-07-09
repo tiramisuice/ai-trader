@@ -11,12 +11,10 @@ AI-powered stock trading system with quant signals, LLM-assisted decisions, and 
   - `api/data/` — market data & news fetching
   - `api/routes/` — API endpoints (decision, trading, portfolio, performance, health)
   - `tests/` — test suite
-- **`web/`** — Next.js frontend (deployed on Fly.io as `ai-trader-web`)
-  - ⚠️ **Source code not yet recovered** — the deployed Fly image only contains the compiled
-    `.next` standalone build (no sourcemaps with original content). The original source lives
-    on another PC and needs to be added to this repo. Recovered so far: `package.json`
-    (dependency list) and `public/` assets.
-  - Pages in the deployed app: `/`, `/history`, `/settings`, `/strategies/[name]`, `/tw`, `/tw/strategies/[name]`
+- **`web/`** — Next.js 16 frontend (deployed on Fly.io as `ai-trader-web`)
+  - Full source recovered from the original dev machine on 2026-07-09
+  - Pages: `/`, `/history`, `/settings`, `/strategies/[name]`, `/tw`, `/tw/strategies/[name]`
+  - Local dev: `npm ci && npm run dev` (set `NEXT_PUBLIC_API_URL`, see `.env.example`)
 
 ## Deployment
 

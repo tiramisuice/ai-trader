@@ -14,17 +14,20 @@
   - Cycle-consistent prices（LLM 看到的價格 = 成交價）
   - Benchmark endpoint：`/api/performance/benchmark/{strategy}`（vs SPY / 0050.TW）
   - LLM 成本入 DB：`llm_costs` 表 + `/api/performance/llm-costs`
-- ⚠️ **尚未部署**：以上修改都在 GitHub，Fly 上仍是舊版 code
+- ✅ **已部署**（2026-07-09）：Phase 1+2 上線，健康檢查通過，benchmark 驗證
+  （tw_ark alpha +41pp vs 0050.TW、quant +3.6pp vs SPY，皆為未含成本的歷史數字）
+- ✅ **Web source 已取回**（2026-07-09）：完整 Next.js source 從舊 PC 補進 `web/`，
+  `npm run build` 驗證通過；backend 與部署版 diff 確認一致（無遺漏改動）
 
 ## 下一步（優先順序）
 
-1. **部署到 Fly**（`fly deploy` in `api/`）— 讓 Phase 1+2 生效；部署後觀察幾個
-   cycle 確認 scheduler、斷路器、成本記帳正常
-2. **從另一台 PC 取回 web source** → 補進 `web/`，之後 frontend 顯示 fees、
-   benchmark 對照、LLM 成本
-3. **重新評估策略績效**：跑 2-4 週含成本的數據後，用 `trades.fees` 和 benchmark
+1. **前端顯示新數據**：fees、benchmark 對照、LLM 成本（API 已就緒：
+   `/api/performance/benchmark/{strategy}`、`/api/performance/llm-costs`）
+2. **重新評估策略績效**：跑 2-4 週含成本的數據後，用 `trades.fees` 和 benchmark
    alpha 判斷哪些 strategy 值得留（tw_quant / tw_aggressive 的高週轉在含成本後
    預期會大幅退化）
+3. **ai-stock-analyst 專案處置**：舊 PC 的 zip 裡還有另一個 Streamlit 研究專案
+   （`ai-stock-analyst/`），待決定是否另建 repo 保存
 
 ## 未來 TODO（機會清單）
 
