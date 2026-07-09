@@ -26,6 +26,7 @@ class Database:
     def __init__(self, db_path: str = DB_PATH) -> None:
         self.db_path = db_path
         self._local = threading.local()
+        self._season_cache: int | None = None
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -95,6 +96,46 @@ class Database:
                 output_tokens INTEGER NOT NULL,
                 cost_usd REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS intents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                season INTEGER NOT NULL,
+                strategy TEXT NOT NULL,
+                kind TEXT NOT NULL,            -- 'conditional_order' | 'wake_trigger'
+                action TEXT,                   -- BUY/SELL (conditional_order only)
+                ticker TEXT NOT NULL,
+                shares INTEGER,                -- conditional_order only
+                trigger_type TEXT NOT NULL,    -- 'price_below' | 'price_at_or_above'
+                trigger_price REAL NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',  -- active/filled/triggered/expired/cancelled
+                filled_trade_id INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status, strategy);
+
+            CREATE TABLE IF NOT EXISTS journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                season INTEGER NOT NULL,
+                strategy TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                wake_reason TEXT NOT NULL DEFAULT '',
+                entry TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_journal_strategy ON journal(strategy, id);
+
+            CREATE TABLE IF NOT EXISTS agent_state (
+                strategy TEXT PRIMARY KEY,
+                next_wakeup TEXT NOT NULL,
+                watchlist_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL
+            );
         """)
         conn.commit()
 
@@ -105,14 +146,160 @@ class Database:
             conn.commit()
             logger.info("Migrated trades table: added fees column")
 
+        # Migration: season columns (season 1 = everything before the soul rework)
+        for table in ("trades", "snapshots", "decision_log"):
+            cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if "season" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN season INTEGER NOT NULL DEFAULT 1")
+                conn.commit()
+                logger.info("Migrated %s table: added season column", table)
+
         logger.info("Database initialized at %s", self.db_path)
+
+    # ------------------------------------------------------------------
+    # Seasons
+    # ------------------------------------------------------------------
+
+    def get_current_season(self) -> int:
+        if getattr(self, "_season_cache", None) is not None:
+            return self._season_cache
+        conn = self._get_conn()
+        row = conn.execute("SELECT value FROM meta WHERE key = 'current_season'").fetchone()
+        self._season_cache = int(row["value"]) if row else 1
+        return self._season_cache
+
+    def start_new_season(self) -> int:
+        """Advance to a new season: archive portfolio states and agent state so
+        every agent restarts with fresh capital. Historical rows keep their
+        season number and remain queryable."""
+        conn = self._get_conn()
+        old = self.get_current_season()
+        new = old + 1
+        conn.execute(
+            "UPDATE portfolio_states SET strategy = strategy || '@s' || ? "
+            "WHERE strategy NOT LIKE '%@s%'",
+            (old,),
+        )
+        conn.execute("DELETE FROM agent_state")
+        conn.execute("UPDATE intents SET status = 'cancelled' WHERE status = 'active'")
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('current_season', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(new),),
+        )
+        conn.commit()
+        self._season_cache = new
+        logger.info("Season %d started (season %d archived)", new, old)
+        return new
+
+    # ------------------------------------------------------------------
+    # Intents (conditional orders + wake triggers)
+    # ------------------------------------------------------------------
+
+    def replace_intents(self, strategy: str, intents: list[dict[str, Any]]) -> None:
+        """Replace a strategy's active intents with a fresh set (each wake, the
+        agent restates its standing orders — simplest consistent semantics)."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE intents SET status = 'cancelled' WHERE strategy = ? AND status = 'active'",
+            (strategy,),
+        )
+        now = datetime.now(timezone.utc)
+        for it in intents:
+            conn.execute(
+                """INSERT INTO intents (season, strategy, kind, action, ticker, shares,
+                       trigger_type, trigger_price, reason, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    self.get_current_season(), strategy, it["kind"], it.get("action"),
+                    it["ticker"], it.get("shares"), it["trigger_type"], it["trigger_price"],
+                    it.get("reason", ""), now.isoformat(), it["expires_at"],
+                ),
+            )
+        conn.commit()
+
+    def get_active_intents(self, strategy: str | None = None) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        if strategy:
+            rows = conn.execute(
+                "SELECT * FROM intents WHERE status = 'active' AND strategy = ?", (strategy,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM intents WHERE status = 'active'").fetchall()
+        return [dict(r) for r in rows]
+
+    def set_intent_status(self, intent_id: int, status: str, filled_trade_id: int | None = None) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE intents SET status = ?, filled_trade_id = ? WHERE id = ?",
+            (status, filled_trade_id, intent_id),
+        )
+        conn.commit()
+
+    def expire_stale_intents(self) -> int:
+        conn = self._get_conn()
+        cur = conn.execute(
+            "UPDATE intents SET status = 'expired' WHERE status = 'active' AND expires_at < ?",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        conn.commit()
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Journal (the agent's diary)
+    # ------------------------------------------------------------------
+
+    def save_journal_entry(self, strategy: str, entry: str, wake_reason: str = "") -> None:
+        if not entry.strip():
+            return
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT INTO journal (season, strategy, timestamp, wake_reason, entry) VALUES (?, ?, ?, ?, ?)",
+            (self.get_current_season(), strategy, datetime.now(timezone.utc).isoformat(), wake_reason, entry),
+        )
+        conn.commit()
+
+    def get_recent_journal(self, strategy: str, limit: int = 5) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT timestamp, wake_reason, entry FROM journal "
+            "WHERE strategy = ? AND season = ? ORDER BY id DESC LIMIT ?",
+            (strategy, self.get_current_season(), limit),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    # ------------------------------------------------------------------
+    # Agent state (wakeup schedule + self-managed watchlist)
+    # ------------------------------------------------------------------
+
+    def get_agent_state(self, strategy: str) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute("SELECT * FROM agent_state WHERE strategy = ?", (strategy,)).fetchone()
+        if row is None:
+            return None
+        return {
+            "strategy": row["strategy"],
+            "next_wakeup": row["next_wakeup"],
+            "watchlist": json.loads(row["watchlist_json"]),
+        }
+
+    def save_agent_state(self, strategy: str, next_wakeup: str, watchlist: list[str]) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO agent_state (strategy, next_wakeup, watchlist_json, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(strategy) DO UPDATE SET next_wakeup=excluded.next_wakeup,
+                   watchlist_json=excluded.watchlist_json, updated_at=excluded.updated_at""",
+            (strategy, next_wakeup, json.dumps(watchlist), datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
 
     def save_trade(self, record: TradeRecord) -> int:
         """Save a trade record and return its ID."""
         conn = self._get_conn()
         cursor = conn.execute(
-            """INSERT INTO trades (timestamp, strategy, action, ticker, shares, price, total_cost, fees, reason, portfolio_value_after)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO trades (timestamp, strategy, action, ticker, shares, price, total_cost, fees, reason, portfolio_value_after, season)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.timestamp.isoformat(),
                 record.strategy,
@@ -124,6 +311,7 @@ class Database:
                 record.fees,
                 record.reason,
                 record.portfolio_value_after,
+                self.get_current_season(),
             ),
         )
         conn.commit()
@@ -154,15 +342,16 @@ class Database:
     def get_trades(self, strategy: str | None = None, limit: int = 50) -> list[TradeRecord]:
         """Get recent trades, optionally filtered by strategy."""
         conn = self._get_conn()
+        season = self.get_current_season()
         if strategy:
             rows = conn.execute(
-                "SELECT * FROM trades WHERE strategy = ? ORDER BY id DESC LIMIT ?",
-                (strategy, limit),
+                "SELECT * FROM trades WHERE strategy = ? AND season = ? ORDER BY id DESC LIMIT ?",
+                (strategy, season, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM trades ORDER BY id DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM trades WHERE season = ? ORDER BY id DESC LIMIT ?",
+                (season, limit),
             ).fetchall()
 
         return [
@@ -183,11 +372,11 @@ class Database:
         ]
 
     def get_snapshots(self, strategy: str, limit: int = 100) -> list[dict[str, Any]]:
-        """Get value snapshots for a strategy (for charting)."""
+        """Get value snapshots for a strategy (for charting). Current season only."""
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT * FROM snapshots WHERE strategy = ? ORDER BY id DESC LIMIT ?",
-            (strategy, limit),
+            "SELECT * FROM snapshots WHERE strategy = ? AND season = ? ORDER BY id DESC LIMIT ?",
+            (strategy, self.get_current_season(), limit),
         ).fetchall()
         return [
             {
@@ -207,18 +396,37 @@ class Database:
         """
         conn = self._get_conn()
         row = conn.execute(
-            "SELECT total_value FROM snapshots WHERE strategy = ? AND timestamp >= ? "
+            "SELECT total_value FROM snapshots WHERE strategy = ? AND timestamp >= ? AND season = ? "
             "ORDER BY timestamp ASC LIMIT 1",
-            (strategy, since_iso),
+            (strategy, since_iso, self.get_current_season()),
         ).fetchone()
         return row["total_value"] if row is not None else None
+
+    def get_peak_value(self, strategy: str) -> float | None:
+        """Highest snapshot value this season (for drawdown context)."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT MAX(total_value) AS peak FROM snapshots WHERE strategy = ? AND season = ?",
+            (strategy, self.get_current_season()),
+        ).fetchone()
+        return row["peak"]
+
+    def get_trades_since(self, strategy: str, since_iso: str) -> list[dict[str, Any]]:
+        """Trades executed for a strategy since a timestamp (fills while asleep)."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT action, ticker, shares, price, reason, timestamp FROM trades "
+            "WHERE strategy = ? AND season = ? AND timestamp > ? ORDER BY id ASC",
+            (strategy, self.get_current_season(), since_iso),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def save_snapshot(self, strategy: str, timestamp: datetime, total_value: float) -> None:
         """Save a portfolio value snapshot."""
         conn = self._get_conn()
         conn.execute(
-            "INSERT INTO snapshots (strategy, timestamp, total_value) VALUES (?, ?, ?)",
-            (strategy, timestamp.isoformat(), total_value),
+            "INSERT INTO snapshots (strategy, timestamp, total_value, season) VALUES (?, ?, ?, ?)",
+            (strategy, timestamp.isoformat(), total_value, self.get_current_season()),
         )
         conn.commit()
 
@@ -237,9 +445,9 @@ class Database:
         conn = self._get_conn()
         cursor = conn.execute(
             """INSERT INTO decision_log
-               (strategy, cycle_number, timestamp, pipeline_json, llm_input_json, llm_output_json, risk_check_json, execution_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (strategy, cycle_number, timestamp, pipeline_json, llm_input_json, llm_output_json, risk_check_json, execution_json),
+               (strategy, cycle_number, timestamp, pipeline_json, llm_input_json, llm_output_json, risk_check_json, execution_json, season)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (strategy, cycle_number, timestamp, pipeline_json, llm_input_json, llm_output_json, risk_check_json, execution_json, self.get_current_season()),
         )
         conn.commit()
         return cursor.lastrowid or 0

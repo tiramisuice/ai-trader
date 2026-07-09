@@ -17,16 +17,17 @@ class ModelSpec:
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
+    # IDs and pricing verified against the models overview docs on 2026-07-09
     "claude-opus": ModelSpec(
         key="claude-opus",
-        model_id="claude-opus-4-6",
+        model_id="claude-opus-4-8",
         provider="anthropic",
         input_cost_per_m=5.0,
         output_cost_per_m=25.0,
     ),
     "claude-sonnet": ModelSpec(
         key="claude-sonnet",
-        model_id="claude-sonnet-4-6",
+        model_id="claude-sonnet-5",
         provider="anthropic",
         input_cost_per_m=3.0,
         output_cost_per_m=15.0,

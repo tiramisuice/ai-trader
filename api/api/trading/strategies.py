@@ -44,10 +44,32 @@ class TradingStrategy(ABC):
         portfolio_state: PortfolioState,
         market_data: str,
         news: str,
+        context: dict[str, Any] | None = None,
     ) -> TradeDecision:
-        """Ask the LLM to make a trading decision."""
+        """Wake the agent: optional web research phase, then a decision.
+
+        `context` carries the agent's continuity: today's date, wake reason,
+        recent journal, standing intents, fills since last wake, watchlist.
+        """
+        context = context or {}
         system = self._build_system_prompt()
-        prompt = self._build_user_prompt(portfolio_state, market_data, news)
+
+        # Phase 1: free-form research with live web search (Anthropic models).
+        # Separate from the decision because structured output forces
+        # tool_choice, which would prevent searching.
+        research_notes = ""
+        try:
+            research_notes = llm.research(
+                model_key=self.model,
+                system=system,
+                prompt=self._build_research_prompt(portfolio_state, context),
+                max_searches=3,
+            )
+        except Exception as e:
+            logger.warning("[%s] research phase failed: %s", self.name, e)
+
+        # Phase 2: the decision, with research notes in context
+        prompt = self._build_user_prompt(portfolio_state, market_data, news, context, research_notes)
 
         logger.info("Strategy %s requesting decision from %s", self.name, self.model)
 
@@ -63,103 +85,153 @@ class TradingStrategy(ABC):
         decision.timestamp = datetime.now(timezone.utc)
         return decision
 
+    def _build_research_prompt(self, state: PortfolioState, context: dict[str, Any]) -> str:
+        holdings = ", ".join(state.positions.keys()) or "none"
+        watchlist = ", ".join(context.get("watchlist") or []) or "none"
+        return (
+            f"Today is {context.get('today', 'unknown')}. You were woken because: "
+            f"{context.get('wake_reason', 'scheduled check')}.\n"
+            f"Your current holdings: {holdings}\n"
+            f"Your watchlist: {watchlist}\n\n"
+            "Before you make any trading decision, you may research the current "
+            "state of the world. Search the web for whatever YOU consider relevant "
+            "right now — market-moving news, your holdings, names you're stalking, "
+            "macro events. Your training memory is outdated; searching is how you "
+            "learn what's true today.\n"
+            "Write concise research notes (bullet points, 繁體中文, tickers/numbers "
+            "in English). If nothing needs research right now, say so briefly."
+        )
+
     def _build_system_prompt(self) -> str:
         if self.market == "tw":
-            prompt = (
-                f"你在交易台灣股票市場（TWSE）。所有分析和推理請用繁體中文。\n\n"
-                f"You are an AI trading agent named '{self.display_name}' ({self.emoji}).\n"
-                f"Strategy style: {self.style}\n\n"
-                f"## Your Trading Rules\n{self.rules}\n\n"
-                "## Important Instructions\n"
-                "- You manage a simulated portfolio with real market data.\n"
-                "- Starting capital is NT$300,000 (TWD).\n"
+            market_block = (
+                "你在交易台灣股票市場（TWSE）。\n"
                 "- You can only BUY or SELL Taiwan-listed stocks (tickers end with .TW).\n"
-                "- You CANNOT short sell. You can only sell shares you own.\n"
-                "- Each BUY order costs shares * current_price. You must have enough cash.\n"
                 "- 交易成本是真實的：每筆買賣收 0.1425% 手續費（最低 NT$20），賣出另收 0.3% 證交稅，"
                 "加上滑價。頻繁進出會嚴重侵蝕報酬 — 只在預期優勢明顯大於來回成本（約 0.6%）時才交易。\n"
-                "- If there are no good trades right now, return an EMPTY orders list with reasoning.\n"
                 "- Be specific about ticker symbols (e.g., 2330.TW, 2317.TW, 2454.TW).\n"
-                "- Think step by step about your analysis before making decisions.\n"
-                "- IMPORTANT: Write your market_analysis and reasoning in 繁體中文 (Traditional Chinese), "
-                "keep it SHORT (2-3 sentences max). Keep ticker symbols and numbers in English.\n"
-                "\n## 量化信號\n"
-                "你會收到量化信號報告（由數學引擎計算）。每支股票有 -10 到 +10 的評分。\n"
-                "- 分數 >= 5: 強烈買入信號。優先考慮。\n"
-                "- 分數 2-4: 買入信號。可以考慮。\n"
-                "- 分數 -1 到 1: 中性。除非有強烈信念否則不買。\n"
-                "- 分數 <= -2: 賣出信號。避免買入，考慮賣出。\n"
-                "- 報告包含基於 ATR 的建議止損價。數學 > 感覺。\n"
-                "- 風險管理系統會自動驗證你的訂單。\n"
             )
         else:
-            prompt = (
-                f"You are an AI trading agent named '{self.display_name}' ({self.emoji}).\n"
-                f"Strategy style: {self.style}\n\n"
-                f"## Your Trading Rules\n{self.rules}\n\n"
-                "## Important Instructions\n"
-                "- You manage a simulated portfolio with real market data.\n"
-                "- Starting capital is $10,000.\n"
+            market_block = (
+                "You trade the US stock market (NYSE/NASDAQ).\n"
                 "- You can only BUY or SELL US-listed stocks.\n"
-                "- You CANNOT short sell. You can only sell shares you own.\n"
-                "- Each BUY order costs shares * current_price. You must have enough cash.\n"
                 "- Transaction costs are real: ~0.05% slippage per trade plus a small SEC fee on sells. "
                 "Churning erodes returns — only trade when your expected edge clearly exceeds the round-trip cost.\n"
-                "- If there are no good trades right now, return an EMPTY orders list with reasoning.\n"
                 "- Be specific about ticker symbols (e.g., AAPL, MSFT, NVDA).\n"
-                "- Think step by step about your analysis before making decisions.\n"
-                "- IMPORTANT: Write your market_analysis and reasoning in 繁體中文 (Traditional Chinese), "
-                "keep it SHORT (2-3 sentences max). Keep ticker symbols and numbers in English.\n"
-                "\n## Quantitative Signals\n"
-                "You will receive a QUANTITATIVE SIGNAL REPORT computed by our math engine.\n"
-                "Each stock has a score from -10 to +10 based on RSI, MACD, SMA, Bollinger Bands, and volume.\n"
-                "- Score >= 5: STRONG BUY signal. Prioritize these.\n"
-                "- Score 2-4: BUY signal. Consider these.\n"
-                "- Score -1 to 1: NEUTRAL. Look for other reasons to buy (value, earnings, news).\n"
-                "- Score <= -2: SELL signal if held. But oversold stocks (RSI < 30) can be buying opportunities!\n"
-                "- The report also includes suggested stop-loss prices based on ATR.\n"
-                "- IMPORTANT: You are here to TRADE, not just hold cash. If you see ANY reasonable opportunity, take it.\n"
-                "- Even in uncertain markets, deploy at least 40-60% of your capital. Sitting in 100% cash means you're not doing your job.\n"
-                "- Look for contrarian opportunities: when everyone is selling, value investors should be buying.\n"
-                "- A risk management system will validate your orders. Oversized orders will be reduced automatically.\n"
             )
-        if self.watchlist is not None:
-            tickers_str = ", ".join(self.watchlist)
-            prompt += (
-                f"\nIMPORTANT: You may ONLY buy stocks from this watchlist: {tickers_str}. "
-                "Any BUY order for a stock NOT on this list will be rejected.\n"
-            )
-        return prompt
+
+        return (
+            f"You are '{self.display_name}' ({self.emoji}), a trader with your own mind, "
+            f"running your own book in a live-market simulation.\n"
+            f"Trading style: {self.style}\n\n"
+            f"## Who You Are\n{self.rules}\n\n"
+            f"## Market\n{market_block}\n"
+            "## Your Autonomy — read this carefully\n"
+            "- You trade ONLY when YOU want to. Nobody measures your activity. "
+            "Returning an empty orders list — for days or weeks — is a legitimate and often wise decision.\n"
+            "- There are NO position limits, NO forced stop-losses, NO minimum cash rules. "
+            "You may concentrate your entire portfolio in a single stock if your conviction demands it.\n"
+            "- Freedom cuts both ways: you own every consequence. If your portfolio goes to zero, "
+            "you are out of the game. Your risk discipline must come from your own character, "
+            "because nothing external will save you.\n"
+            "- The only physics: you cannot spend cash you don't have, cannot short, "
+            "cannot sell shares you don't own.\n\n"
+            "## Reality Check\n"
+            "- Today's date is in the user message. Your training memory about prices, valuations, "
+            "market caps and events is OUT OF DATE. Trust ONLY the market data provided and your "
+            "research notes. Never quote a price or fact from memory.\n\n"
+            "## Your Instruments of Intent\n"
+            "- `orders`: execute NOW at current market price.\n"
+            "- `conditional_orders`: standing orders that fill automatically while you sleep "
+            "(buy the dip, take profit, stop loss — set trigger, price, shares, good_for_days).\n"
+            "- `wake_triggers`: price conditions that wake you up to reassess, with no pre-committed order.\n"
+            "- `next_check_hours`: when you want your next scheduled look at the market "
+            "(0.25 to 120 hours). Pick what fits your style and current plans.\n"
+            "- IMPORTANT: every decision REPLACES all your previous conditional orders and wake "
+            "triggers. Restate any you want to keep.\n"
+            "- `journal`: your private trading diary（用繁體中文寫）— thesis, plans, doubts, lessons. "
+            "You will read it next time you wake. This is your memory; use it well.\n"
+            "- `watchlist_add` / `watchlist_remove`: curate your own coverage list. "
+            "You may also trade stocks not on it — the list only controls what data you're shown.\n\n"
+            "## Quantitative Signals\n"
+            "You will receive a signal report computed by a math engine (scores -10 to +10 from RSI, "
+            "MACD, SMA, Bollinger, volume; plus factor scores and market regime). It is an input, "
+            "not an order — weigh it according to your own style.\n\n"
+            "## Output Language\n"
+            "Write market_analysis, reasoning and journal in 繁體中文 (Traditional Chinese); "
+            "keep tickers and numbers in English. Analysis/reasoning SHORT (2-3 sentences); "
+            "journal as long as you need.\n"
+        )
 
     def _build_user_prompt(
         self,
         state: PortfolioState,
         market_data: str,
         news: str,
+        context: dict[str, Any] | None = None,
+        research_notes: str = "",
     ) -> str:
+        context = context or {}
         currency_symbol = "NT$" if self.market == "tw" else "$"
         positions_str = "None" if not state.positions else "\n".join(
             f"  - {t}: {p.shares} shares @ avg {currency_symbol}{p.avg_cost:.2f} (current {currency_symbol}{p.current_price:.2f})"
             for t, p in state.positions.items()
         )
 
+        journal_entries = context.get("journal") or []
+        journal_str = "\n\n".join(
+            f"[{e['timestamp'][:16]}] (woke: {e['wake_reason'] or 'scheduled'})\n{e['entry']}"
+            for e in journal_entries
+        ) or "（這是你的第一次甦醒 — 還沒有日記。）"
+
+        intents = context.get("intents") or []
+        intents_str = "\n".join(
+            (
+                f"  - {it['kind']}: {it.get('action') or 'WAKE'} {it['ticker']} "
+                f"{'x' + str(it['shares']) + ' ' if it.get('shares') else ''}"
+                f"when {it['trigger_type']} {currency_symbol}{it['trigger_price']:.2f} "
+                f"(expires {it['expires_at'][:10]}) — {it.get('reason', '')}"
+            )
+            for it in intents
+        ) or "  (none)"
+
+        fills = context.get("fills") or []
+        fills_str = "\n".join(
+            f"  - {f['action']} {f['ticker']} x{f['shares']} @ {currency_symbol}{f['price']:.2f} — {f['reason']}"
+            for f in fills
+        ) or "  (nothing happened while you slept)"
+
+        status = context.get("status") or {}
+        status_str = (
+            f"Today's P&L: {status.get('today_pnl_pct', 0):+.2f}% | "
+            f"Total return: {state.total_return_pct:+.2f}% | "
+            f"Drawdown from season peak: {status.get('drawdown_pct', 0):-.2f}%"
+        )
+
+        watchlist = context.get("watchlist") or []
+
         return (
+            f"## Today\n{context.get('today', 'unknown')}\n"
+            f"You were woken because: {context.get('wake_reason', 'scheduled check')}\n\n"
+            f"## Your Recent Journal (your own words, most recent last)\n{journal_str}\n\n"
+            f"## Your Standing Intents — this decision REPLACES them, restate keepers\n{intents_str}\n\n"
+            f"## While You Slept\n{fills_str}\n\n"
+            f"## Scoreboard\n{status_str}\n\n"
             "## Current Portfolio\n"
             f"Cash: {currency_symbol}{state.cash:,.2f}\n"
             f"Total Value: {currency_symbol}{state.total_value:,.2f}\n"
-            f"Return: {state.total_return_pct:+.2f}%\n"
             f"Trade Count: {state.trade_count}\n"
             f"Positions:\n{positions_str}\n\n"
+            f"## Your Watchlist\n{', '.join(watchlist) or '(empty)'}\n\n"
             f"## Market Data\n{market_data}\n\n"
-            f"## News\n{news or 'No recent news available.'}\n\n"
-            "## Your Task\n"
-            "Analyze the market conditions and your portfolio, then decide on trades.\n"
-            "Return your decision as a TradeDecision JSON with these fields:\n"
-            "- strategy: your strategy name\n"
-            "- timestamp: current ISO timestamp\n"
-            "- market_analysis: brief analysis of current market conditions\n"
-            "- orders: list of TradeOrder objects (action, ticker, shares, reason) — can be empty\n"
-            "- reasoning: explain your overall reasoning for this cycle's decisions\n"
+            f"## News Headlines\n{news or 'No recent news available.'}\n\n"
+            f"## Your Research Notes (from your web search just now)\n"
+            f"{research_notes or '(you chose not to research this time)'}\n\n"
+            "## Your Move\n"
+            "Decide what you actually want to do — including nothing. Fill every field of the "
+            "TradeDecision: orders (may be empty), conditional_orders, wake_triggers, "
+            "next_check_hours, journal (寫下你的想法), watchlist_add, watchlist_remove, "
+            "market_analysis, reasoning.\n"
         )
 
 
@@ -183,8 +255,9 @@ class BuffettStrategy(TradingStrategy):
         "- Rarely trade. Hold forever if the investment thesis is intact.\n"
         "- 'Be fearful when others are greedy, and greedy when others are fearful.'\n"
         "- Avoid speculative or overhyped stocks. Prefer boring, predictable cash flows.\n"
-        "- Patience is your edge — but even Buffett says 'be greedy when others are fearful.'\n"
-        "- In down markets, look for quality companies at discount prices. Deploy at least 50% of capital.\n"
+        "- Patience is your edge. Sitting in cash waiting for the fat pitch IS a position.\n"
+        "- When the fat pitch comes — a wonderful business at a silly price — swing hard. "
+        "Concentration in your best idea is how fortunes are made.\n"
         "- Think in terms of decades, not quarters.\n"
     )
 
@@ -207,7 +280,7 @@ class ARKStrategy(TradingStrategy):
         "- The bigger the disruption, the bigger the opportunity.\n"
         "- Sell when the innovation thesis breaks, not because of price drops.\n"
         "- Innovation doesn't stop in bear markets. Disruptive companies get cheaper — that's your opportunity.\n"
-        "- Always be at least 60% invested. Cash doesn't disrupt anything.\n"
+        "- When conviction is extreme, concentrate. A single world-changing company can be worth your whole book.\n"
     )
 
 
@@ -229,8 +302,8 @@ class MomentumStrategy(TradingStrategy):
         "- Sector rotation: go where the momentum is flowing.\n"
         "- News catalysts and earnings beats are buying signals.\n"
         "- If a stock is trending down, get out. Don't catch falling knives.\n"
-        "- If the market is flat, look for sector rotation opportunities. Something is always moving.\n"
-        "- Never sit in more than 40% cash. Deploy capital aggressively.\n"
+        "- In flat, choppy markets, sitting out is a trade — forcing entries in chop is how momentum traders die.\n"
+        "- When a real trend confirms, size up hard and ride it. Fortune favors the aggressive — at the right moment.\n"
     )
 
 
@@ -258,7 +331,7 @@ class BalancedStrategy(TradingStrategy):
         "- Use both growth and value criteria for stock selection.\n"
         "- Risk management is your primary edge.\n"
         "- Steady returns > spectacular swings.\n"
-        "- A balanced portfolio should always be at least 50% invested. Pure cash is not balanced.\n"
+        "- Cash is an asset class — size it deliberately based on conditions, never by default.\n"
     )
 
 
@@ -284,8 +357,8 @@ class QuantStrategy(TradingStrategy):
         "- Death cross (50-day MA < 200-day MA) = strong sell signal.\n"
         "- No emotion, no stories, no 'I think the company is great'. Only signals.\n"
         "- Position sizing based on signal strength and portfolio risk.\n"
-        "- If signals are mixed or weak, be selective but still trade. RSI < 30 is always a mean-reversion BUY signal.\n"
-        "- Deploy at least 50% of capital when multiple oversold signals exist simultaneously.\n"
+        "- If signals are mixed or weak, stay flat. No signal = no trade. Discipline IS the strategy.\n"
+        "- When multiple strong signals align, size up decisively.\n"
     )
 
 

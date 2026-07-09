@@ -142,6 +142,56 @@ class LLMClient:
             self._openai = openai.OpenAI(api_key=api_key)
         return self._openai
 
+    # ------- research phase (server-side web search) -------
+
+    # $10 per 1,000 searches on the Claude API (docs, verified 2026-07-09)
+    WEB_SEARCH_COST_PER_QUERY = 0.01
+
+    def research(
+        self,
+        model_key: str,
+        system: str,
+        prompt: str,
+        max_searches: int = 3,
+        max_tokens: int = 2048,
+    ) -> str:
+        """Let the model research with live web search before deciding.
+
+        Runs as a separate free-form phase because structured output forces
+        tool_choice onto the output tool, which would prevent searching.
+        Only Anthropic models support this; others return "" (no research).
+        Returns the model's research notes as text.
+        """
+        spec = get_model(model_key)
+        if spec.provider != "anthropic":
+            return ""
+
+        tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": max_searches}]
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+
+        # The API may pause a long search turn; resend the partial assistant
+        # message to continue (bounded to avoid loops).
+        for _ in range(3):
+            resp = self.anthropic_client.messages.create(
+                model=spec.model_id,
+                max_tokens=max_tokens,
+                system=system,
+                messages=messages,
+                tools=tools,
+            )
+            self._track(spec, resp.usage.input_tokens, resp.usage.output_tokens)
+            searches = getattr(resp.usage, "server_tool_use", None)
+            n_searches = getattr(searches, "web_search_requests", 0) if searches else 0
+            if n_searches:
+                cost_tracker.record(spec.key, 0, 0, n_searches * self.WEB_SEARCH_COST_PER_QUERY)
+            if resp.stop_reason != "pause_turn":
+                break
+            messages = messages + [{"role": "assistant", "content": resp.content}]
+
+        return "\n".join(
+            block.text for block in resp.content if getattr(block, "type", "") == "text"
+        ).strip()
+
     # ------- structured JSON completion -------
 
     def complete_json(

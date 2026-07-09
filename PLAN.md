@@ -1,6 +1,20 @@
 # PLAN
 
-## 目前狀態（2026-07-08）
+## 目前狀態（2026-07-09）
+
+- ✅ **Phase 3 — Soul Agents**（本 commit）：
+  - Agent 完全自主：拆掉風控籠子（只留物理定律 + 真實成本）、刪強迫交易 prompt、
+    可 all-in、自選喚醒時間（0.25–120hr）
+  - Event-driven scheduler：5 分鐘 tick；conditional orders 睡覺時自動成交；
+    wake triggers / 自訂鬧鐘 / 成交事件喚醒
+  - 記憶系統：journal（繁中日記）+ standing intents + 睡眠期間事件回饋
+  - 新資訊：research phase（Anthropic web search，max 3 次/決策）+ 日期
+    + 反舊記憶指令；agent 自管 watchlist
+  - 賽季制：season 隔離數據、`api/tools/start_season.py` 開季工具
+  - LLM 升級：claude-opus-4-8 / claude-sonnet-5
+  - ⚠️ 尚未部署、尚未開 Season 2
+
+## 歷史（2026-07-08）
 
 - ✅ **救援**：API source 從 Fly machine 完整取回、建 repo（`tiramisuice/ai-trader`）、
   108MB trading.db 備份（13,224 trades / 3 個月）
@@ -21,24 +35,24 @@
 
 ## 下一步（優先順序）
 
-1. **前端顯示新數據**：fees、benchmark 對照、LLM 成本（API 已就緒：
-   `/api/performance/benchmark/{strategy}`、`/api/performance/llm-costs`）
-2. **重新評估策略績效**：跑 2-4 週含成本的數據後，用 `trades.fees` 和 benchmark
-   alpha 判斷哪些 strategy 值得留（tw_quant / tw_aggressive 的高週轉在含成本後
-   預期會大幅退化）
-3. **ai-stock-analyst 專案處置**：舊 PC 的 zip 裡還有另一個 Streamlit 研究專案
-   （`ai-stock-analyst/`），待決定是否另建 repo 保存
+1. **部署 + 開 Season 2**：`fly deploy` → `python -m api.tools.start_season --yes`
+   → 重啟 → 觀察第一批喚醒的 journal 和 research notes
+2. **觀察一週**：追蹤 agent 的睡眠節奏、web search 使用量（成本）、conditional
+   fills 是否正常、journal 的連續性
+3. **前端 Soul 化**：顯示 journal 時間軸、standing intents、喚醒排程、
+   season 切換、fees、benchmark、LLM 成本
+4. **ai-stock-analyst 專案處置**：舊 PC zip 裡的 Streamlit 研究專案，
+   待決定是否另建 repo 保存
 
 ## 未來 TODO（機會清單）
 
-- Regime scaling 完全單一化（移除 optimizer 內的 regime 乘數，只留 execution）
-- `.info` 逐檔抓取優化（fast_info 或欄位級快取）；insider 批次化
-- Scheduler 的 end-to-end mocked cycle test（回歸防護的最後一塊）
-- 歷史績效重算工具：用既有 13,224 筆 trades 回推「若含成本」的真實 equity curve
-- LLM model 選型檢討：對照官方 pricing 更新 `llm/models.py` 常數；考慮低頻策略
-  用較便宜的 model
+- 爆倉自動出局判定 + 賽季排行榜 API
+- OpenAI agent 的 research 工具（Tavily / Finnhub client-side loop）
+- 長線選股系統（獨立於本競技場，另行設計 — Jay 的個人策略是長線）
+- 歷史績效重算工具：用 Season 1 的 13,224 筆 trades 回推「若含成本」的 equity curve
+- `.info` 逐檔抓取優化；insider 批次化
+- Scheduler 的 end-to-end mocked tick test
 - 風險指標擴充：Sharpe / Sortino / 每策略 fees 累計顯示在 performance API
-- 前端：benchmark 對照圖、決策稽核 viewer（decision_log 已有完整資料）
 
 ## 決策記錄（重要的 why）
 

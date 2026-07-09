@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from api.db.sqlite import db
 from api.trading.scheduler import trading_scheduler
 from api.trading.strategies import ALL_STRATEGIES
 from api.trading.strategies_tw import ALL_TW_STRATEGIES
@@ -66,6 +67,8 @@ def scheduler_status() -> dict[str, Any]:
     """Get the current scheduler status for both US and TW markets."""
     return {
         "running": trading_scheduler.is_running,
+        "season": db.get_current_season(),
+        "agents": trading_scheduler.get_agent_states(),
         "us": {
             "cycle_count": trading_scheduler.cycle_count,
             "next_run_time": trading_scheduler.get_next_run_time(),

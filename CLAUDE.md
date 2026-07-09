@@ -1,7 +1,13 @@
 # AI Trader — Project Documentation
 
+> ⚠️ 本文件是從舊 PC 救回的原始文檔，部分內容已過時。**現況以 `ARCHITECTURE.md` /
+> `PLAN.md` / `DECISIONS.md` 為準**。已知過時處：risk rules 已拆除（Phase 3 Soul
+> Agents，agent 完全自主）、scheduler 已改 event-driven tick、model 已升級
+> claude-opus-4-8 / claude-sonnet-5、目錄 backend/ → api/、frontend/ → web/。
+
 ## What This Is
-AI 模擬交易系統：5 個 AI 策略各拿 $10K (美股) / NT$300K (台股) 競賽，自動每 15-60 分鐘做交易決策。
+AI 模擬交易競技場：10 個有靈魂的自主 AI trader 各拿 $10K (美股) / NT$300K (台股)，
+自己決定何時交易、何時睡覺、要不要 all-in。賽季制，爆倉出局。
 
 ## Architecture
 
@@ -79,10 +85,10 @@ ai-trader/
 - **Auto-deploy rule**: After making any code changes, always run `fly deploy` for the affected service(s) automatically — do not wait for the user to ask.
 
 ## AI Models
-- **Claude Opus 4** (`claude-opus-4-20250514`): Buffett strategies (US + TW)
-- **Claude Sonnet 4** (`claude-sonnet-4-20250514`): ARK + Balanced strategies
+- **Claude Opus 4.8** (`claude-opus-4-8`): Buffett strategies (US + TW)
+- **Claude Sonnet 5** (`claude-sonnet-5`): ARK + Balanced strategies
 - **GPT-5.4** (`gpt-5.4`): Momentum + Quant strategies
-- Note: Claude 4.6 model IDs (`claude-opus-4-6`, `claude-sonnet-4-6`) exist in docs but returned 404 on API. Currently using 4.0 versions. Retry 4.6 IDs periodically.
+- Anthropic agents 有 research phase（web_search tool，max 3 searches/決策，$0.01/search）
 
 ## Trading Strategies
 
