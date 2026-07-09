@@ -265,6 +265,7 @@ export interface DecisionFlow {
   llm_input: {
     market_data_preview: string
     news_preview: string
+    wake_reason?: string // soul era (season 2+)
   }
   llm_output: {
     market_analysis: string
@@ -275,20 +276,39 @@ export interface DecisionFlow {
       shares: number
       reason: string
     }>
+    // soul era (season 2+)
+    journal?: string
+    conditional_orders?: Array<{
+      action: string
+      ticker: string
+      shares: number
+      trigger: string
+      trigger_price: number
+      good_for_days: number
+      reason: string
+    }>
+    wake_triggers?: Array<{ ticker: string; condition: string; price: number }>
+    next_check_hours?: number
   }
   risk_check: {
-    orders_approved: Array<{
+    // cage era (season 1) — absent in soul-era logs
+    orders_approved?: Array<{
       action: string
       ticker: string
       shares: number
       original_shares: number
       adjustments: string[]
     }>
-    orders_blocked: Array<{
+    orders_blocked?: Array<{
       action: string
       ticker: string
       shares: number
       reason: string
+    }>
+    // soul era (season 2+): physics rejections only
+    orders_rejected?: Array<{
+      order: { action: string; ticker: string; shares: number; reason: string }
+      why: string
     }>
   }
   execution: {

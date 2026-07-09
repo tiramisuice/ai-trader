@@ -608,6 +608,13 @@ class TradingScheduler:
                     "combined_score": round(cs.combined_score, 3),
                     "signal": cs.signal,
                     "rank": cs.rank,
+                    "breakdown": {
+                        "technical": round(cs.technical_score, 3),
+                        "factor": round(cs.factor_score, 3),
+                        "insider": round(cs.insider_score, 3),
+                    },
+                    "suggested_weight": round(cs.suggested_weight, 3),
+                    "confidence": round(cs.confidence, 3),
                 }
                 for cs in sorted(combined_scores.values(), key=lambda x: x.combined_score, reverse=True)
             ],

@@ -232,9 +232,23 @@ function StepQuant({ data }: { data: DecisionFlow }) {
 
 function StepLLM({ data }: { data: DecisionFlow }) {
   const { market_analysis, reasoning, orders_proposed } = data.llm_output
+  const journal = data.llm_output.journal
+  const conditionals = data.llm_output.conditional_orders ?? []
+  const wakeTriggers = data.llm_output.wake_triggers ?? []
+  const nextCheck = data.llm_output.next_check_hours
+  const wakeReason = data.llm_input.wake_reason
 
   return (
     <div className="space-y-4">
+      {wakeReason && (
+        <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-4">
+          <p className="mb-1 text-xs font-medium text-blue-400">
+            &#x270B; Wake Reason 甦醒原因
+          </p>
+          <p className="text-sm leading-relaxed text-foreground">{wakeReason}</p>
+        </div>
+      )}
+
       {market_analysis && (
         <div className="rounded-lg bg-zinc-800 p-4">
           <p className="mb-1 text-xs font-medium text-muted-foreground">
@@ -252,6 +266,41 @@ function StepLLM({ data }: { data: DecisionFlow }) {
             Reasoning
           </p>
           <p className="text-sm leading-relaxed text-foreground">{reasoning}</p>
+        </div>
+      )}
+
+      {journal && (
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+          <p className="mb-1 text-xs font-medium text-amber-400">
+            &#x1F4D3; Trading Journal 交易日記
+          </p>
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+            {journal}
+          </p>
+        </div>
+      )}
+
+      {(conditionals.length > 0 || wakeTriggers.length > 0 || nextCheck !== undefined) && (
+        <div className="rounded-lg bg-zinc-800 p-4 space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">
+            &#x23F0; Standing Intents 掛單與鬧鐘
+          </p>
+          {conditionals.map((c, i) => (
+            <p key={`c${i}`} className="font-mono text-xs text-foreground">
+              {c.action} {c.ticker} x{c.shares} when {c.trigger}{" "}
+              {c.trigger_price} ({c.good_for_days}d) — {c.reason}
+            </p>
+          ))}
+          {wakeTriggers.map((w, i) => (
+            <p key={`w${i}`} className="font-mono text-xs text-foreground">
+              WAKE me when {w.ticker} {w.condition} {w.price}
+            </p>
+          ))}
+          {nextCheck !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              下次自主檢查：{nextCheck} 小時後
+            </p>
+          )}
         </div>
       )}
 
@@ -303,7 +352,57 @@ function StepLLM({ data }: { data: DecisionFlow }) {
 /* ------------------------------------------------------------------ */
 
 function StepRisk({ data }: { data: DecisionFlow }) {
-  const { orders_approved, orders_blocked } = data.risk_check
+  const orders_approved = data.risk_check.orders_approved ?? []
+  const orders_blocked = data.risk_check.orders_blocked ?? []
+  const orders_rejected = data.risk_check.orders_rejected ?? []
+  const isSoulEra = data.risk_check.orders_approved === undefined
+
+  // Soul era (season 2+): no risk cage — only physics rejections exist
+  if (isSoulEra) {
+    return (
+      <div className="space-y-2">
+        {orders_rejected.length > 0 ? (
+          <>
+            <p className="text-xs font-medium text-red-500">
+              Rejected by physics ({orders_rejected.length})
+            </p>
+            {orders_rejected.map((r, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3"
+              >
+                <Badge
+                  variant="secondary"
+                  className={
+                    r.order.action === "BUY"
+                      ? "bg-green-500/10 text-green-500"
+                      : "bg-red-500/10 text-red-500"
+                  }
+                >
+                  {r.order.action}
+                </Badge>
+                <div className="flex-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="font-mono text-sm font-bold text-foreground">
+                      {r.order.ticker}
+                    </span>
+                    <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                      {r.order.shares} shares
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-red-400">{r.why}</p>
+                </div>
+              </div>
+            ))}
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Agent 完全自主 — 只有物理定律（現金/持股/做空）會擋單，本次無違規 ✅
+          </p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -479,8 +578,9 @@ export function DecisionFlowComponent({
   if (data.llm_output.market_analysis || data.llm_output.orders_proposed.length > 0)
     completedCount = 3
   if (
-    data.risk_check.orders_approved.length > 0 ||
-    data.risk_check.orders_blocked.length > 0
+    (data.risk_check.orders_approved?.length ?? 0) > 0 ||
+    (data.risk_check.orders_blocked?.length ?? 0) > 0 ||
+    data.risk_check.orders_rejected !== undefined
   )
     completedCount = 4
   if (data.execution.trades_executed.length >= 0 && data.execution.portfolio_after)
