@@ -123,11 +123,12 @@ def get_strategy_benchmark(strategy: str) -> dict[str, Any]:
 
     try:
         hist = fetch_history(benchmark_ticker, "2y")
-        window = hist.loc[start_date:end_date]
-        if len(window) < 2:
+        # yfinance occasionally returns NaN rows (e.g. the current session)
+        closes = hist.loc[start_date:end_date]["Close"].dropna()
+        if len(closes) < 2:
             raise ValueError(f"no benchmark data in window {start_date}..{end_date}")
-        bench_start = float(window["Close"].iloc[0])
-        bench_end = float(window["Close"].iloc[-1])
+        bench_start = float(closes.iloc[0])
+        bench_end = float(closes.iloc[-1])
         benchmark_return_pct = round((bench_end / bench_start - 1) * 100, 2)
     except Exception as e:
         logger.error("Benchmark fetch failed for %s: %s", benchmark_ticker, e)
