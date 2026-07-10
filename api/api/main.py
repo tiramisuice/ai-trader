@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.db.sqlite import db
-from api.routes import decision, health, performance, portfolio, trading
+from api.routes import decision, health, overview, performance, portfolio, trading
 from api.trading.scheduler import trading_scheduler
 
 # Load environment variables from .env
@@ -68,3 +68,4 @@ app.include_router(trading.router)
 app.include_router(portfolio.router)
 app.include_router(performance.router)
 app.include_router(decision.router)
+app.include_router(overview.router)

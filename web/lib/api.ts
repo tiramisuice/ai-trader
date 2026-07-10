@@ -365,3 +365,91 @@ export function getActiveMarket(): "us" | "tw" | "closed" {
   if (usOpen) return "us";
   return "closed";
 }
+
+// --- Soul-era: agent overview + stock detail ---
+
+export interface AgentOverview {
+  strategy: string
+  display_name: string
+  emoji: string
+  model: string
+  style: string
+  currency: string
+  total_value: number
+  return_pct: number
+  cash: number
+  positions: Array<{ ticker: string; shares: number; pnl_pct: number }>
+  next_wakeup: string | null
+  watchlist_size: number
+  intents: Array<{
+    kind: string
+    action: string | null
+    ticker: string
+    shares: number | null
+    trigger_type: string
+    trigger_price: number
+    reason: string
+    expires_at: string
+  }>
+  last_journal: { timestamp: string; wake_reason: string; entry: string } | null
+  sparkline: Array<{ t: string; v: number }>
+}
+
+export async function getOverview(market: "us" | "tw" = "us"): Promise<AgentOverview[]> {
+  return apiFetch<AgentOverview[]>(`/api/overview?market=${market}`)
+}
+
+export interface StockDetail {
+  ticker: string
+  name: string
+  quote: {
+    price: number
+    day_change_pct: number
+    volume: number | null
+    market_cap: number | null
+    pe_ratio: number | null
+    dividend_yield: number | null
+  }
+  stats: {
+    high_52w: number
+    low_52w: number
+    sma20: number | null
+    sma50: number | null
+    rsi14: number | null
+    return_range_pct: number
+  }
+  chart: Array<{ date: string; close: number }>
+  holders: Array<{
+    strategy: string
+    display_name: string
+    emoji: string
+    market: string
+    shares: number
+    avg_cost: number
+    pnl_pct: number
+  }>
+  recent_trades: Trade[]
+  intents: Array<{
+    strategy: string
+    kind: string
+    action: string | null
+    shares: number | null
+    trigger_type: string
+    trigger_price: number
+    reason: string
+  }>
+}
+
+export type StockRange = "1mo" | "3mo" | "6mo" | "1y" | "2y"
+
+export async function getStockDetail(ticker: string, range: StockRange = "6mo"): Promise<StockDetail> {
+  return apiFetch<StockDetail>(`/api/stock/${encodeURIComponent(ticker)}?range=${range}`)
+}
+
+// Fixed per-agent colors (colorblind-safe on dark, validated)
+export const AGENT_COLORS: Record<string, string> = {
+  buffett: "#d97706", ark: "#a855f7", aggressive: "#f43f5e",
+  balanced: "#0d9488", quant: "#3b82f6",
+  tw_buffett: "#d97706", tw_ark: "#a855f7", tw_aggressive: "#f43f5e",
+  tw_balanced: "#0d9488", tw_quant: "#3b82f6",
+}

@@ -13,8 +13,10 @@ import {
 } from "@/components/dashboard-skeletons"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import type { Status, Portfolio, Trade } from "@/lib/api"
-import { getStatus, getPortfolios, getTrades } from "@/lib/api"
+import { AgentOverviewGrid } from "@/components/agent-overview"
+import { EquityChart } from "@/components/equity-chart"
+import type { Status, Portfolio, Trade, AgentOverview } from "@/lib/api"
+import { getStatus, getPortfolios, getTrades, getOverview } from "@/lib/api"
 
 const REFRESH_INTERVAL = 30_000
 
@@ -22,20 +24,23 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<Status | null>(null)
   const [portfolios, setPortfolios] = useState<Portfolio[]>([])
   const [trades, setTrades] = useState<Trade[]>([])
+  const [overview, setOverview] = useState<AgentOverview[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [chartRange, setChartRange] = useState<string>("1W")
 
   const fetchData = useCallback(async () => {
     try {
-      const [statusData, portfoliosData, tradesData] = await Promise.all([
+      const [statusData, portfoliosData, tradesData, overviewData] = await Promise.all([
         getStatus(),
         getPortfolios(),
         getTrades(undefined, 20),
+        getOverview("us"),
       ])
       setStatus(statusData)
       setPortfolios(portfoliosData)
       setTrades(tradesData)
+      setOverview(overviewData)
       setError(null)
     } catch {
       setError(
@@ -90,15 +95,16 @@ export default function DashboardPage() {
       {/* Section 1: Status Bar */}
       <StatusBar status={status} onRefresh={fetchData} />
 
-      {/* Section 2: Leaderboard */}
-      <Leaderboard portfolios={portfolios} />
+      {/* Section 2: Agents Now — 現況總覽 */}
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold text-foreground">🤖 Agents 現況</h2>
+        <AgentOverviewGrid agents={overview} marketPath="" />
+      </div>
 
-      {/* Section 3: Performance Chart */}
+      {/* Section 3: Equity 走勢圖 */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-foreground">
-            Performance
-          </h2>
+          <h2 className="text-lg font-semibold text-foreground">📈 資產走勢（%）</h2>
           <div className="flex gap-1">
             {["1D", "1W", "1M", "ALL"].map((range) => (
               <Button
@@ -113,49 +119,13 @@ export default function DashboardPage() {
             ))}
           </div>
         </div>
-        <Card>
-          <CardContent className="pt-6">
-            {portfolios.length > 0 ? (
-              <div className="space-y-3">
-                {portfolios
-                  .sort((a, b) => b.total_return_pct - a.total_return_pct)
-                  .map((p) => (
-                  <div key={p.strategy} className="flex items-center gap-3">
-                    <span className="w-24 text-sm text-muted-foreground truncate">
-                      {p.emoji} {p.strategy}
-                    </span>
-                    <div className="flex-1 h-6 bg-zinc-800 rounded-full overflow-hidden relative">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          (p.total_return_pct ?? 0) >= 0 ? "bg-green-500/70" : "bg-red-500/70"
-                        }`}
-                        style={{
-                          width: `${Math.min(Math.max(Math.abs(p.total_return_pct ?? 0) * 5 + 2, 2), 100)}%`,
-                        }}
-                      />
-                      <span className="absolute inset-0 flex items-center justify-center text-xs font-mono text-foreground">
-                        {(p.total_return_pct ?? 0) >= 0 ? "+" : ""}{(p.total_return_pct ?? 0).toFixed(2)}%
-                      </span>
-                    </div>
-                    <span className="w-20 text-right text-sm font-mono tabular-nums text-foreground">
-                      ${(p.total_value ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0})}
-                    </span>
-                  </div>
-                ))}
-                <p className="text-xs text-muted-foreground text-center mt-2">
-                  Line chart will appear after more trading cycles accumulate data
-                </p>
-              </div>
-            ) : (
-              <div className="flex h-48 items-center justify-center">
-                <p className="text-sm text-muted-foreground">No data yet</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <EquityChart agents={overview} range={chartRange} />
       </div>
 
-      {/* Section 4: Recent Trades */}
+      {/* Section 4: Leaderboard */}
+      <Leaderboard portfolios={portfolios} />
+
+      {/* Section 5: Recent Trades */}
       <TradeFeed trades={trades} />
     </div>
   )

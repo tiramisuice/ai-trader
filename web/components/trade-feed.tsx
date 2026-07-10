@@ -1,5 +1,7 @@
 "use client"
 
+import Link from "next/link"
+
 import { useState } from "react"
 import {
   Table,
@@ -85,7 +87,7 @@ function TradeRow({ trade, currencyFormatter }: { trade: Trade; currencyFormatte
         </Badge>
       </TableCell>
       <TableCell>
-        <span className="font-mono font-semibold">{trade.ticker}</span>
+        <Link href={`/stock/${trade.ticker}`} className="font-mono font-semibold hover:underline">{trade.ticker}</Link>
         {getStockName(trade.ticker) && (
           <span className="ml-1.5 text-xs text-muted-foreground">{getStockName(trade.ticker)}</span>
         )}

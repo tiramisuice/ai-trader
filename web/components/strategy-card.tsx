@@ -1,5 +1,7 @@
 "use client"
 
+import Link from "next/link"
+
 import {
   Card,
   CardContent,
@@ -83,7 +85,7 @@ export function StrategyCard({ portfolio }: StrategyCardProps) {
                 {portfolio.positions.map((pos) => (
                   <TableRow key={pos.ticker} className="border-border">
                     <TableCell>
-                      <span className="font-mono font-semibold">{pos.ticker}</span>
+                      <Link href={`/stock/${pos.ticker}`} className="font-mono font-semibold hover:underline">{pos.ticker}</Link>
                       {getStockName(pos.ticker) && (
                         <span className="ml-1.5 text-xs text-muted-foreground">{getStockName(pos.ticker)}</span>
                       )}
