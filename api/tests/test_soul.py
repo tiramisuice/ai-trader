@@ -44,7 +44,7 @@ def test_decision_soul_fields_default_empty():
     )
     assert d.conditional_orders == []
     assert d.wake_triggers == []
-    assert d.next_check_hours == 24.0
+    assert d.next_check_hours == 8.0
     assert d.journal == ""
 
 

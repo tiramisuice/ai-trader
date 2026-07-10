@@ -57,7 +57,7 @@ TW_STARTING_CAPITAL = 300_000.0
 
 # Agents choose their own cadence within these bounds
 MIN_SLEEP_HOURS = 0.25
-MAX_SLEEP_HOURS = 120.0
+MAX_SLEEP_HOURS = 48.0
 WAKE_TRIGGER_TTL_DAYS = 14
 
 

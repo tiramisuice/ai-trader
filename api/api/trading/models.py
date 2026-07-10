@@ -48,7 +48,7 @@ class TradeDecision(BaseModel):
     wake_triggers: list[WakeTrigger] = Field(default_factory=list)
     # When the agent wants its next scheduled look at the market, in hours.
     # It can sleep for days if nothing interests it.
-    next_check_hours: float = Field(ge=0.25, le=120, default=24.0)
+    next_check_hours: float = Field(ge=0.25, le=48, default=8.0)
     # The agent's trading diary — thesis, plans, feelings. Fed back next wake.
     journal: str = ""
     watchlist_add: list[str] = Field(default_factory=list)
