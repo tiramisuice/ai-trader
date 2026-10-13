@@ -1,10 +1,22 @@
 # PLAN
 
-## 目前狀態（2026-07-09）
+## 目前狀態（2026-10-13）
 
-- ✅ **Phase 3 — Soul Agents**（本 commit）：
+- ✅ **Season 2 上線中**：2026-07-09 部署 Phase 3 並開季，已跑 96 天（資料到 2026-10-13）
+  - 10 個 agent 裡 5 個贏大盤（含真實成本）；Season 1 粗估扣成本後是 3 個
+  - 交易量：Season 1 約 3 個月 13,224 筆 → Season 2 約 3 個月 110 筆（少 ~99%）
+  - LLM 成本約 $407（~$127/月），遠高於舊估計的 $25–30/月
+  - 詳細數字見 README「Results」
+- ✅ **Public release 準備**（2026-10-13）：
+  - 控制類 endpoint 加 admin token（`api/api/auth.py`），前端 status bar 改唯讀
+  - 英文 README（含 v1/v2 對照與結果）、MIT LICENSE、GitHub Actions CI、`api/.env.example`
+  - 清掉過時的 CLAUDE.md、web boilerplate README 與未使用的 public/*.svg
+
+## 歷史（2026-07-09）
+
+- ✅ **Phase 3 — Soul Agents**（commit `71152db`）：
   - Agent 完全自主：拆掉風控籠子（只留物理定律 + 真實成本）、刪強迫交易 prompt、
-    可 all-in、自選喚醒時間（0.25–120hr）
+    可 all-in、自選喚醒時間（0.25–48hr）
   - Event-driven scheduler：5 分鐘 tick；conditional orders 睡覺時自動成交；
     wake triggers / 自訂鬧鐘 / 成交事件喚醒
   - 記憶系統：journal（繁中日記）+ standing intents + 睡眠期間事件回饋
@@ -12,7 +24,7 @@
     + 反舊記憶指令；agent 自管 watchlist
   - 賽季制：season 隔離數據、`api/tools/start_season.py` 開季工具
   - LLM 升級：claude-opus-4-8 / claude-sonnet-5
-  - ⚠️ 尚未部署、尚未開 Season 2
+  - 之後把睡眠上限從 120hr 降到 48hr（commit `611f261`）
 
 ## 歷史（2026-07-08）
 
@@ -35,12 +47,13 @@
 
 ## 下一步（優先順序）
 
-1. **部署 + 開 Season 2**：`fly deploy` → `python -m api.tools.start_season --yes`
-   → 重啟 → 觀察第一批喚醒的 journal 和 research notes
-2. **觀察一週**：追蹤 agent 的睡眠節奏、web search 使用量（成本）、conditional
-   fills 是否正常、journal 的連續性
-3. **前端 Soul 化**：顯示 journal 時間軸、standing intents、喚醒排程、
+1. **LLM 成本檢討**：~$127/月 已接近美股 5 個 agent 的帳面獲利；考慮 research phase
+   次數上限、便宜 model 做初篩、或拉長預設喚醒間隔
+2. **前端 Soul 化**：顯示 journal 時間軸、standing intents、喚醒排程、
    season 切換、fees、benchmark、LLM 成本
+3. **前端 lint 清零**：4 個 React 19 compiler 規則錯誤（`set-state-in-effect`、
+   impure render）在 market-nav / market-banner / stock page / equity-chart；修完後把
+   `npm run lint` 加進 CI
 4. **ai-stock-analyst 專案處置**：舊 PC zip 裡的 Streamlit 研究專案，
    待決定是否另建 repo 保存
 

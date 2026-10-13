@@ -6,8 +6,9 @@ import logging
 import traceback
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from api.auth import require_admin
 from api.db.sqlite import db
 from api.trading.scheduler import trading_scheduler
 from api.trading.strategies import ALL_STRATEGIES
@@ -30,7 +31,7 @@ def list_tw_strategies() -> list[dict[str, Any]]:
     return [s.get_info().model_dump() for s in ALL_TW_STRATEGIES]
 
 
-@router.post("/api/cycle")
+@router.post("/api/cycle", dependencies=[Depends(require_admin)])
 def trigger_cycle() -> dict[str, Any]:
     """Manually trigger one US trading cycle and return results."""
     try:
@@ -46,7 +47,7 @@ def trigger_cycle() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/cycle/tw")
+@router.post("/api/cycle/tw", dependencies=[Depends(require_admin)])
 def trigger_tw_cycle() -> dict[str, Any]:
     """Manually trigger one Taiwan trading cycle and return results."""
     try:
@@ -82,7 +83,7 @@ def scheduler_status() -> dict[str, Any]:
     }
 
 
-@router.post("/api/start")
+@router.post("/api/start", dependencies=[Depends(require_admin)])
 def start_scheduler() -> dict[str, str]:
     """Start the automatic trading scheduler."""
     if trading_scheduler.is_running:
@@ -91,7 +92,7 @@ def start_scheduler() -> dict[str, str]:
     return {"status": "started"}
 
 
-@router.post("/api/stop")
+@router.post("/api/stop", dependencies=[Depends(require_admin)])
 def stop_scheduler() -> dict[str, str]:
     """Stop the automatic trading scheduler."""
     if not trading_scheduler.is_running:

@@ -11,8 +11,9 @@ research + 記憶 + 自主意志），同時操作美股與台股。賽季制：
 | 資料 | yfinance（行情）、feedparser（新聞 RSS）、SQLite（WAL mode，Fly volume `/data`） |
 | LLM | Anthropic + OpenAI（structured output：tool_use / json_schema） |
 | Quant | numpy、scipy、hmmlearn（HMM regime） |
-| Frontend | Next.js 16 + React 19 + Tailwind 4 + recharts（source 待從另一台 PC 補回） |
+| Frontend | Next.js 16 + React 19 + Tailwind 4 + shadcn/ui + recharts（唯讀 dashboard） |
 | 部署 | Fly.io（`ai-trader-api` + `ai-trader-web`，sjc region） |
+| CI | GitHub Actions：API pytest + web typecheck / production build |
 
 ## 資料流（event-driven tick loop）
 
@@ -41,6 +42,8 @@ APScheduler tick（每 5 分鐘，美股 ET / 台股 Asia/Taipei 各一）
 ## 模組地圖（api/）
 
 - `main.py` — FastAPI app + lifespan（開機自動啟動 scheduler）
+- `auth.py` — `require_admin` dependency：控制類 endpoint（start / stop / cycle）需要
+  `X-Admin-Token` header 對上 `ADMIN_TOKEN`；沒設定 `ADMIN_TOKEN` 時直接停用（fail closed）
 - `trading/` — `scheduler.py`（tick loop + 喚醒管理）、`portfolio.py`（模擬帳戶，
   物理定律在這）、`costs.py`（成本模型）、`strategies.py` / `strategies_tw.py`
   （10 個 persona + 自主權宣言 + research/decide 兩階段）、
@@ -53,8 +56,8 @@ APScheduler tick（每 5 分鐘，美股 ET / 台股 Asia/Taipei 各一）
   `models.py`（registry：claude-opus-4-8 / claude-sonnet-5 / gpt-5.4）
 - `db/sqlite.py` — SQLite wrapper（seasons、intents、journal、agent_state、llm_costs）
 - `tools/start_season.py` — 開新賽季（封存 portfolio、歸零重開）
-- `routes/` — health / trading（status 含 season + agent 喚醒排程）/ portfolio /
-  performance（benchmark、llm-costs）/ decision
+- `routes/` — health / trading（status 含 season + agent 喚醒排程；POST 控制類需 admin token）/
+  portfolio / performance（benchmark、llm-costs）/ decision / overview
 
 ## 關鍵設計原則
 

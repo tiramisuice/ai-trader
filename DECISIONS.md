@@ -2,6 +2,20 @@
 
 重要技術與產品決策記錄（what / why / alternatives considered）。
 
+## 2026-10-13 — 控制類 endpoint 加 admin token，repo 改為 public
+
+**What**：`POST /api/start`、`/api/stop`、`/api/cycle`、`/api/cycle/tw` 需要 `X-Admin-Token`
+header（對 `ADMIN_TOKEN` Fly secret 做 constant-time 比對）；沒設定 token 時回 503（fail closed）。
+前端 status bar 改為唯讀（拿掉 Start / Stop / Run Now 按鈕）。repo 加上英文 README、MIT LICENSE、
+GitHub Actions CI 後改為 public。
+
+**Why**：原本這些 endpoint 完全沒驗證，任何訪客都能停掉實驗或觸發付費的 LLM 呼叫（每輪多次
+Opus / Sonnet 呼叫）。repo 公開後 endpoint 一目了然，風險變高，必須先鎖。
+
+**Alternatives considered**：把 token 放進前端 `NEXT_PUBLIC_*` 變數保留按鈕（否決：會直接曝光
+在瀏覽器 bundle）；只靠 CORS 擋（否決：CORS 只擋瀏覽器，curl 照樣能打）；完整 user auth
+（否決：只有一個管理者，殺雞用牛刀）。
+
 ## 2026-07-09 — Phase 3「Soul Agents」：拆掉風控籠子，agent 完全自主
 
 **What**：刪除 `risk_rules.py` 與所有執行層風控（部位上限、強制停損、每日虧損斷路器、

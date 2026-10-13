@@ -1,58 +1,21 @@
 "use client"
 
-import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import type { Status } from "@/lib/api"
-import { startTrading, stopTrading, runCycle } from "@/lib/api"
 import { cn, formatRelativeTime } from "@/lib/utils"
 
 interface StatusBarProps {
   status: Status | null
   onRefresh: () => void
-  runCycleFn?: () => Promise<unknown>
-  showToggle?: boolean
   label?: string
 }
 
 export function StatusBar({
   status,
   onRefresh,
-  runCycleFn,
-  showToggle = true,
   label = "Trading",
 }: StatusBarProps) {
-  const [loading, setLoading] = useState(false)
-
-  async function handleToggle() {
-    setLoading(true)
-    try {
-      if (status?.running) {
-        await stopTrading()
-      } else {
-        await startTrading()
-      }
-      onRefresh()
-    } catch {
-      // silently handle error
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleRunNow() {
-    setLoading(true)
-    try {
-      const fn = runCycleFn ?? runCycle
-      await fn()
-      onRefresh()
-    } catch {
-      // silently handle error
-    } finally {
-      setLoading(false)
-    }
-  }
-
   const isRunning = status?.running ?? false
 
   return (
@@ -87,26 +50,10 @@ export function StatusBar({
           </>
         )}
       </div>
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRunNow}
-          disabled={loading}
-        >
-          Run Now
-        </Button>
-        {showToggle && (
-          <Button
-            variant={isRunning ? "destructive" : "default"}
-            size="sm"
-            onClick={handleToggle}
-            disabled={loading}
-          >
-            {isRunning ? "Stop" : "Start"}
-          </Button>
-        )}
-      </div>
+      {/* Read-only: start/stop/manual cycles require the admin token (see README) */}
+      <Button variant="outline" size="sm" onClick={onRefresh}>
+        Refresh
+      </Button>
     </div>
   )
 }

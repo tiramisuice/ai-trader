@@ -15,7 +15,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { AgentOverviewGrid } from "@/components/agent-overview"
 import { EquityChart } from "@/components/equity-chart"
 import type { Status, Portfolio, Trade, AgentOverview } from "@/lib/api"
-import { getStatus, getTWPortfolios, getTWTrades, runTWCycle, getOverview } from "@/lib/api"
+import { getStatus, getTWPortfolios, getTWTrades, getOverview } from "@/lib/api"
 import { formatCurrencyTW, formatCurrencyTWPrecise } from "@/lib/utils"
 
 const REFRESH_INTERVAL = 30_000
@@ -93,8 +93,6 @@ export default function TWDashboardPage() {
       <StatusBar
         status={status}
         onRefresh={fetchData}
-        runCycleFn={runTWCycle}
-        showToggle={false}
         label={"\u53F0\u80A1 Trading"}
       />
 

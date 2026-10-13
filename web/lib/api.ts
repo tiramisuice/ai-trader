@@ -159,18 +159,6 @@ export async function getStatus(): Promise<Status> {
   return apiFetch<Status>("/api/status");
 }
 
-export async function runCycle(): Promise<{ message: string }> {
-  return apiFetch<{ message: string }>("/api/cycle", { method: "POST" });
-}
-
-export async function startTrading(): Promise<{ message: string }> {
-  return apiFetch<{ message: string }>("/api/start", { method: "POST" });
-}
-
-export async function stopTrading(): Promise<{ message: string }> {
-  return apiFetch<{ message: string }>("/api/stop", { method: "POST" });
-}
-
 export async function getSnapshots(strategy: string): Promise<Snapshot[]> {
   return apiFetch<Snapshot[]>(
     `/api/snapshots/${encodeURIComponent(strategy)}`
@@ -213,10 +201,6 @@ export async function getTWTrades(
 
 export async function getTWStrategies(): Promise<Strategy[]> {
   return apiFetch<Strategy[]>("/api/strategies/tw");
-}
-
-export async function runTWCycle(): Promise<{ message: string }> {
-  return apiFetch<{ message: string }>("/api/cycle/tw", { method: "POST" });
 }
 
 export async function getTWPositionsDetail(
