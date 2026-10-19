@@ -60,7 +60,7 @@ class TW_MomentumStrategy(TradingStrategy):
     display_name = "\u52d5\u80fd\u6a5f\u5668\u4eba"
     emoji = "\u26a1"  # lightning
     description = "\u52d5\u80fd\u4ea4\u6613\uff0c\u8ffd\u6f32\u6bba\u8dcc\uff0c\u6280\u8853\u9762\u512a\u5148\u3002"
-    model = "gpt-5.4"
+    model = "gpt-6.1-sol"
     style = "momentum"
     market = "tw"
     watchlist = None
@@ -114,7 +114,7 @@ class TW_QuantStrategy(TradingStrategy):
     display_name = "\u91cf\u5316\u5f15\u64ce"
     emoji = "\U0001f916"  # robot
     description = "\u7d14\u6280\u8853\u6307\u6a19\u9a45\u52d5\uff0cRSI/MACD/\u5747\u7dda\u3002"
-    model = "gpt-5.4"
+    model = "gpt-6.1-sol"
     style = "quant"
     market = "tw"
     watchlist = [

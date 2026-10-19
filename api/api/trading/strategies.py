@@ -78,7 +78,7 @@ class TradingStrategy(ABC):
             system=system,
             prompt=prompt,
             response_model=TradeDecision,
-            max_tokens=4096,
+            max_tokens=16000,  # covers thinking/reasoning + the JSON decision
         )
         # Override strategy and timestamp to ensure correctness
         decision.strategy = self.name
@@ -289,7 +289,7 @@ class MomentumStrategy(TradingStrategy):
     display_name = "Momentum Bot"
     emoji = "\u26a1"  # lightning
     description = "Pure momentum and growth: chase breakouts, cut losses fast, let winners run."
-    model = "gpt-5.4"
+    model = "gpt-6.1-sol"
     style = "momentum"
     rules = (
         "You are a momentum/growth trader.\n"
@@ -340,7 +340,7 @@ class QuantStrategy(TradingStrategy):
     display_name = "Quant Engine"
     emoji = "\U0001f916"  # robot
     description = "Data-driven signals only: RSI, MACD, moving averages, volume. No narrative."
-    model = "gpt-5.4"
+    model = "gpt-6.1-sol"
     style = "quant"
     watchlist = [
         "NVDA", "TSLA", "AAPL", "AMZN", "META", "MSFT", "AMD", "GOOGL", "INTC", "MU",

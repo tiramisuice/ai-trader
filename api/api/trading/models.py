@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 class TradeOrder(BaseModel):
@@ -38,8 +39,10 @@ class WakeTrigger(BaseModel):
 
 
 class TradeDecision(BaseModel):
-    strategy: str
-    timestamp: datetime
+    # Filled in by the system after the LLM call. Hidden from the LLM's schema:
+    # exposing them made models fill `strategy` with prose and confused the shape.
+    strategy: SkipJsonSchema[str] = ""
+    timestamp: SkipJsonSchema[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
     market_analysis: str
     orders: list[TradeOrder]
     reasoning: str
@@ -53,6 +56,16 @@ class TradeDecision(BaseModel):
     journal: str = ""
     watchlist_add: list[str] = Field(default_factory=list)
     watchlist_remove: list[str] = Field(default_factory=list)
+
+    @field_validator("next_check_hours", mode="before")
+    @classmethod
+    def _clamp_sleep(cls, v: object) -> object:
+        """An out-of-range sleep request is clamped instead of discarding the
+        whole decision (Anthropic strict schemas can't enforce min/max)."""
+        try:
+            return min(max(float(v), 0.25), 48.0)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return v
 
 
 class Position(BaseModel):

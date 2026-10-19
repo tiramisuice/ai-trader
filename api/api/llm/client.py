@@ -78,8 +78,18 @@ class CostTracker:
 cost_tracker = CostTracker()
 
 
+def _persist_cost(model_key: str, input_tokens: int, output_tokens: int, cost_usd: float) -> None:
+    """Write one cost record to the DB (llm_costs). Never raises."""
+    try:
+        from api.db.sqlite import db
+
+        db.save_llm_cost(model_key, input_tokens, output_tokens, cost_usd)
+    except Exception as e:
+        logger.warning("Failed to persist LLM cost: %s", e)
+
+
 # ---------------------------------------------------------------------------
-# Schema helpers for OpenAI strict mode
+# Schema helpers for strict structured outputs (OpenAI + Anthropic)
 # ---------------------------------------------------------------------------
 
 def _make_all_required(schema: dict) -> dict:
@@ -113,6 +123,48 @@ def _make_all_required(schema: dict) -> dict:
     return schema
 
 
+# JSON Schema keywords Anthropic structured outputs reject (400). Numeric bounds
+# are kept as human-readable descriptions so the model still sees them.
+_ANTHROPIC_BOUND_KEYWORDS = {
+    "minimum": ">=", "maximum": "<=", "exclusiveMinimum": ">", "exclusiveMaximum": "<",
+}
+_ANTHROPIC_DROPPED_KEYWORDS = ("multipleOf", "minLength", "maxLength", "maxItems")
+
+
+def _strip_unsupported_keywords(node: Any) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _strip_unsupported_keywords(item)
+        return
+    if not isinstance(node, dict):
+        return
+
+    bounds = [f"{sym} {node.pop(kw)}" for kw, sym in _ANTHROPIC_BOUND_KEYWORDS.items() if kw in node]
+    for kw in _ANTHROPIC_DROPPED_KEYWORDS:
+        node.pop(kw, None)
+    if node.get("minItems", 0) > 1:
+        node.pop("minItems")
+    if bounds:
+        note = "Must be " + " and ".join(bounds) + "."
+        node["description"] = f"{node['description']} {note}" if node.get("description") else note
+
+    for key, value in node.items():
+        if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
+            for sub_schema in value.values():  # keys here are names, not keywords
+                _strip_unsupported_keywords(sub_schema)
+        else:
+            _strip_unsupported_keywords(value)
+
+
+def _strict_schema_anthropic(schema: dict) -> dict:
+    """Adapt a Pydantic JSON schema to Anthropic structured outputs: every
+    property required, `additionalProperties: false`, and no numeric/string
+    constraint keywords. Returns a new schema; the input is not mutated."""
+    strict = _make_all_required(schema)
+    _strip_unsupported_keywords(strict)
+    return strict
+
+
 # ---------------------------------------------------------------------------
 # LLM Client
 # ---------------------------------------------------------------------------
@@ -144,7 +196,7 @@ class LLMClient:
 
     # ------- research phase (server-side web search) -------
 
-    # $10 per 1,000 searches on the Claude API (docs, verified 2026-07-09)
+    # $10 per 1,000 searches on the Claude API (docs, verified 2026-10-19)
     WEB_SEARCH_COST_PER_QUERY = 0.01
 
     def research(
@@ -153,12 +205,12 @@ class LLMClient:
         system: str,
         prompt: str,
         max_searches: int = 3,
-        max_tokens: int = 2048,
+        max_tokens: int = 16000,
     ) -> str:
         """Let the model research with live web search before deciding.
 
-        Runs as a separate free-form phase because structured output forces
-        tool_choice onto the output tool, which would prevent searching.
+        Runs as a separate free-form phase so the decision call stays a single
+        schema-constrained JSON response. `max_tokens` covers thinking + text.
         Only Anthropic models support this; others return "" (no research).
         Returns the model's research notes as text.
         """
@@ -169,8 +221,9 @@ class LLMClient:
         tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": max_searches}]
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
-        # The API may pause a long search turn; resend the partial assistant
-        # message to continue (bounded to avoid loops).
+        # Continue the turn when the API pauses a long search, or when the model
+        # asks for a client tool we don't offer (bounded to avoid loops).
+        notes: list[str] = []
         for _ in range(3):
             resp = self.anthropic_client.messages.create(
                 model=spec.model_id,
@@ -178,19 +231,39 @@ class LLMClient:
                 system=system,
                 messages=messages,
                 tools=tools,
+                **self._anthropic_effort(spec),
             )
             self._track(spec, resp.usage.input_tokens, resp.usage.output_tokens)
             searches = getattr(resp.usage, "server_tool_use", None)
             n_searches = getattr(searches, "web_search_requests", 0) if searches else 0
             if n_searches:
-                cost_tracker.record(spec.key, 0, 0, n_searches * self.WEB_SEARCH_COST_PER_QUERY)
-            if resp.stop_reason != "pause_turn":
-                break
-            messages = messages + [{"role": "assistant", "content": resp.content}]
+                self._record_cost("web_search", 0, 0, n_searches * self.WEB_SEARCH_COST_PER_QUERY)
+            # Citations split the answer into many text blocks — join them seamlessly
+            notes.append("".join(b.text for b in resp.content if getattr(b, "type", "") == "text"))
 
-        return "\n".join(
-            block.text for block in resp.content if getattr(block, "type", "") == "text"
-        ).strip()
+            if resp.stop_reason == "pause_turn":
+                messages = messages + [{"role": "assistant", "content": resp.content}]
+                continue
+            declined = [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": b.id,
+                    "is_error": True,
+                    "content": "This tool is not available. Finish your research notes with what you have.",
+                }
+                for b in resp.content
+                if getattr(b, "type", "") == "tool_use"
+            ]
+            if resp.stop_reason == "tool_use" and declined:
+                # Seen on Sonnet 5.5: without this the notes stop mid-way
+                messages = messages + [
+                    {"role": "assistant", "content": resp.content},
+                    {"role": "user", "content": declined},
+                ]
+                continue
+            break
+
+        return "\n".join(n for n in notes if n).strip()
 
     # ------- structured JSON completion -------
 
@@ -222,32 +295,37 @@ class LLMClient:
         response_model: type[BaseModel],
         max_tokens: int,
     ) -> BaseModel:
-        """Use Anthropic tool_use to enforce a JSON schema."""
-        schema = response_model.model_json_schema()
+        """Use Anthropic structured outputs (grammar-constrained JSON).
 
-        tool_name = "structured_output"
-        tool_def = {
-            "name": tool_name,
-            "description": f"Return the result as a {response_model.__name__} JSON object.",
-            "input_schema": schema,
-        }
+        Replaces the old forced-tool_choice approach: Claude Opus 5.5 / Sonnet 5.5
+        reject forced tool use, and unconstrained tool input let models return the
+        wrong shape (e.g. a bare TradeOrder), which failed validation and burned
+        a full research + decide cycle on every retry."""
+        schema = _strict_schema_anthropic(response_model.model_json_schema())
+        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        output_config.update(self._anthropic_effort(spec).get("output_config", {}))
 
         resp = self.anthropic_client.messages.create(
             model=spec.model_id,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": prompt}],
-            tools=[tool_def],
-            tool_choice={"type": "tool", "name": tool_name},
+            output_config=output_config,
         )
         self._track_anthropic(spec, resp)
 
-        # Extract tool_use block
-        for block in resp.content:
-            if block.type == "tool_use":
-                return response_model.model_validate(block.input)
+        if resp.stop_reason != "end_turn":
+            raise RuntimeError(
+                f"Anthropic {spec.model_id} stopped with {resp.stop_reason!r} "
+                f"before finishing the {response_model.__name__}"
+            )
+        # Thinking blocks come first; the JSON is in the text block(s)
+        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+        return response_model.model_validate_json(text)
 
-        raise RuntimeError("No tool_use block returned by Anthropic")
+    @staticmethod
+    def _anthropic_effort(spec: ModelSpec) -> dict[str, Any]:
+        return {"output_config": {"effort": spec.effort}} if spec.effort else {}
 
     def _track_anthropic(self, spec: ModelSpec, resp: Any) -> None:
         usage = resp.usage
@@ -305,14 +383,14 @@ class LLMClient:
             input_tokens * spec.input_cost_per_m / 1_000_000
             + output_tokens * spec.output_cost_per_m / 1_000_000
         )
-        cost_tracker.record(spec.key, input_tokens, output_tokens, cost)
-        try:
-            from api.db.sqlite import db
+        self._record_cost(spec.key, input_tokens, output_tokens, cost)
 
-            db.save_llm_cost(spec.key, input_tokens, output_tokens, cost)
-        except Exception as e:
-            logger.warning("Failed to persist LLM cost: %s", e)
+    @staticmethod
+    def _record_cost(key: str, input_tokens: int, output_tokens: int, cost: float) -> None:
+        """Record a cost in memory and in the DB. `key` is a model key, or
+        "web_search" for per-search fees ($10 / 1,000 searches)."""
+        cost_tracker.record(key, input_tokens, output_tokens, cost)
+        _persist_cost(key, input_tokens, output_tokens, cost)
         logger.info(
-            "LLM call: model=%s in=%d out=%d cost=$%.4f",
-            spec.key, input_tokens, output_tokens, cost,
+            "LLM cost: %s in=%d out=%d cost=$%.4f", key, input_tokens, output_tokens, cost,
         )

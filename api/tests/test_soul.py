@@ -61,13 +61,14 @@ def test_conditional_order_validation():
         )
 
 
-def test_next_check_hours_bounds():
-    with pytest.raises(Exception):
-        TradeDecision(
-            strategy="q", timestamp=datetime.now(timezone.utc),
-            market_analysis="x", orders=[], reasoning="y",
-            next_check_hours=500.0,  # > 120 cap
-        )
+def test_next_check_hours_out_of_range_is_clamped():
+    # Clamped rather than rejected: a bad sleep value must not discard a decision
+    d = TradeDecision(
+        strategy="q", timestamp=datetime.now(timezone.utc),
+        market_analysis="x", orders=[], reasoning="y",
+        next_check_hours=500.0,
+    )
+    assert d.next_check_hours == 48
 
 
 # --- Intents lifecycle ---
