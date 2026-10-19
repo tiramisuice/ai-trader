@@ -2,6 +2,27 @@
 
 重要技術與產品決策記錄（what / why / alternatives considered）。
 
+## 2026-10-19 — 修正 Claude 決策失敗、升級 model、開 Season 3
+
+**What**：
+- Anthropic 決策從「強制 tool_choice + 不受限 schema」改為 structured outputs（`output_config.format`，
+  grammar-constrained JSON）。schema 轉成 Anthropic 支援的子集：全部欄位 required、
+  `additionalProperties: false`、數值上下限移到 description。`strategy` / `timestamp` 不再暴露給 LLM。
+- `next_check_hours` 超出範圍改為 clamp，不再讓整份決策作廢。
+- Model 升級（同價位最新）：claude-opus-5-5（$4/$20）、claude-sonnet-5-5（$2/$10）、gpt-6.1-sol（$2/$10），
+  全部 medium effort。`max_tokens` 提高到 16000（thinking / reasoning token 算在內）。
+- 成本記錄修正：Sonnet 5 原本被記成 $3/$15（實際 $2/$10）、GPT-5.4 output 記成 $10（實際 $15）；
+  web search 費用改為寫入 DB。
+- 開 Season 3（Season 2 封存；開季前 DB 備份到 `/data/trading-s2-final-20261019.db` 和本機 `recovered/`）。
+
+**Why**：Season 2 最後 4 週，Opus 196 次呼叫只有 14 次成功決策。Opus 常只回一張 TradeOrder 形狀的
+JSON（~130 output tokens），驗證失敗後「睡 1 小時重試」，每次都重跑 research + decide。失敗呼叫約占
+LLM 費用 58%（每週約 $14）。另外 Opus 5.5 / Sonnet 5.5 直接拒絕強制 tool_choice（400），升級必須換做法。
+開新賽季是因為 Season 2 的 Opus agent 大部分時間無法決策，結果混入新 model 會無法比較。
+
+**Alternatives considered**：只加 retry（否決：治標，仍燒 research 成本）；改用 Fable 5.1 / GPT-6 Astra
+（否決：每週成本約翻倍以上，使用者選同價位）；不開新季直接換 model（否決：結果無法解讀）。
+
 ## 2026-10-13 — 控制類 endpoint 加 admin token，repo 改為 public
 
 **What**：`POST /api/start`、`/api/stop`、`/api/cycle`、`/api/cycle/tw` 需要 `X-Admin-Token`

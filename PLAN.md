@@ -1,11 +1,14 @@
 # PLAN
 
-## 目前狀態（2026-10-13）
+## 目前狀態（2026-10-19）
 
-- ✅ **Season 2 上線中**：2026-07-09 部署 Phase 3 並開季，已跑 96 天（資料到 2026-10-13）
-  - 10 個 agent 裡 5 個贏大盤（含真實成本）；Season 1 粗估扣成本後是 3 個
-  - 交易量：Season 1 約 3 個月 13,224 筆 → Season 2 約 3 個月 110 筆（少 ~99%）
-  - LLM 成本約 $407（~$127/月），遠高於舊估計的 $25–30/月
+- ✅ **Season 3 開跑**（2026-10-19 23:30 UTC）：修正 Claude 決策失敗 bug + 升級到
+  claude-opus-5-5 / claude-sonnet-5-5 / gpt-6.1-sol（全部 medium effort）。細節見 DECISIONS.md
+- ✅ **Season 2 結束**（2026-07-09 → 2026-10-19，102 天）：
+  - 10 個 agent 裡 6 個贏大盤（含真實成本）；SPY +2.0%、0050 +2.0%
+  - 交易量：Season 1 13,224 筆 → Season 2 113 筆（少 ~99%）
+  - LLM 成本實際約 $371（約 $25/週）；最後 4 週約 58% 花在失敗的 Claude 決策
+  - Opus agent 大部分決策失敗，Warren AI / 巴菲特AI 的結果要打折看
   - 詳細數字見 README「Results」
 - ✅ **Public release 準備**（2026-10-13）：
   - 控制類 endpoint 加 admin token（`api/api/auth.py`），前端 status bar 改唯讀
@@ -47,14 +50,16 @@
 
 ## 下一步（優先順序）
 
-1. **LLM 成本檢討**：~$127/月 已接近美股 5 個 agent 的帳面獲利；考慮 research phase
-   次數上限、便宜 model 做初篩、或拉長預設喚醒間隔
-2. **前端 Soul 化**：顯示 journal 時間軸、standing intents、喚醒排程、
+1. **觀察 Season 3 第一週**：確認決策成功率（目標 ~100%）、每週 LLM 成本（預期明顯低於 Season 2
+   的 ~$25/週，但 thinking token 會增加 output）、research 筆記品質
+2. **LLM 成本優化**：research 的 input token 很大（web search 結果全部塞進 context）；
+   可試 `web_search_20260318` 的 dynamic filtering，或 prompt caching
+3. **前端 Soul 化**：顯示 journal 時間軸、standing intents、喚醒排程、
    season 切換、fees、benchmark、LLM 成本
-3. **前端 lint 清零**：4 個 React 19 compiler 規則錯誤（`set-state-in-effect`、
+4. **前端 lint 清零**：4 個 React 19 compiler 規則錯誤（`set-state-in-effect`、
    impure render）在 market-nav / market-banner / stock page / equity-chart；修完後把
    `npm run lint` 加進 CI
-4. **ai-stock-analyst 專案處置**：舊 PC zip 裡的 Streamlit 研究專案，
+5. **ai-stock-analyst 專案處置**：舊 PC zip 裡的 Streamlit 研究專案，
    待決定是否另建 repo 保存
 
 ## 未來 TODO（機會清單）

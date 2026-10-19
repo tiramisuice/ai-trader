@@ -24,10 +24,11 @@ cd web && npx tsc --noEmit && npm run build    # frontend checks
 
 ## Rules
 
-- **Live experiment.** Season 2 is running on Fly.io with persistent state. Deploy only when asked, and only outside market hours where possible (US 9:30–16:00 ET, TW 9:00–13:30 Asia/Taipei).
-- **Season data.** Queries must filter by `season`. Season 1 is an archived baseline.
+- **Live experiment.** Season 3 is running on Fly.io with persistent state. Deploy only when asked, and only outside market hours where possible (US 9:30–16:00 ET, TW 9:00–13:30 Asia/Taipei).
+- **Season data.** Queries must filter by `season`. Seasons 1–2 are archived baselines.
 - **No risk guardrails by design.** Agents are fully autonomous on paper money. If real money is ever discussed, risk controls must be restored first (`risk_rules.py` lives in git history; see `DECISIONS.md`).
 - **Control endpoints are admin-only.** `POST /api/start|stop|cycle|cycle/tw` require `X-Admin-Token` (`ADMIN_TOKEN` env/Fly secret). Never expose the token to the frontend.
 - **Costs are always on.** Use `ZERO_COST_MODEL` only in tests.
 - **Secrets.** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `ADMIN_TOKEN` come from env / `fly secrets`. Never commit them. The production DB is never committed.
 - **LLM model IDs and pricing.** Verify against the official provider docs before changing `api/api/llm/models.py`.
+- **Structured outputs, not forced tools.** Current Claude models reject forced `tool_choice`; decisions use `output_config.format` (JSON schema adapted by `_strict_schema_anthropic`). Thinking/reasoning tokens count toward `max_tokens` and bill as output.

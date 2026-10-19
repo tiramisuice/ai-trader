@@ -9,7 +9,7 @@ research + 記憶 + 自主意志），同時操作美股與台股。賽季制：
 |---|---|
 | Backend | Python 3.13 / FastAPI / APScheduler |
 | 資料 | yfinance（行情）、feedparser（新聞 RSS）、SQLite（WAL mode，Fly volume `/data`） |
-| LLM | Anthropic + OpenAI（structured output：tool_use / json_schema） |
+| LLM | Anthropic + OpenAI（grammar-constrained structured outputs：Anthropic `output_config.format` / OpenAI `json_schema` strict） |
 | Quant | numpy、scipy、hmmlearn（HMM regime） |
 | Frontend | Next.js 16 + React 19 + Tailwind 4 + shadcn/ui + recharts（唯讀 dashboard） |
 | 部署 | Fly.io（`ai-trader-api` + `ai-trader-web`，sjc region） |
@@ -52,8 +52,9 @@ APScheduler tick（每 5 分鐘，美股 ET / 台股 Asia/Taipei 各一）
   `portfolio_optimizer.py`、`position_sizing.py`、`earnings.py`、`anomaly.py`、
   `performance.py`（optimizer/sizing 目前不在主 pipeline，保留為工具）
 - `data/` — `fetch.py`（tenacity retry）、`batch.py`（批次下載）、`market.py`、`news.py`
-- `llm/` — `client.py`（雙 provider + `research()` web search + cost tracking）、
-  `models.py`（registry：claude-opus-4-8 / claude-sonnet-5 / gpt-5.4）
+- `llm/` — `client.py`（雙 provider + `research()` web search + cost tracking，web search
+  費用以 `web_search` 記入 `llm_costs`）、`models.py`（registry：claude-opus-5-5 / claude-sonnet-5-5 /
+  gpt-6.1-sol，全部 medium effort）
 - `db/sqlite.py` — SQLite wrapper（seasons、intents、journal、agent_state、llm_costs）
 - `tools/start_season.py` — 開新賽季（封存 portfolio、歸零重開）
 - `routes/` — health / trading（status 含 season + agent 喚醒排程；POST 控制類需 admin token）/

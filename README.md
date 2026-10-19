@@ -40,7 +40,7 @@ flowchart LR
 
 1. **Quant engine (no LLM).** Computes technical signals (RSI, MACD, Bollinger, SMA, ATR), a five-factor model, HMM market-regime detection, SEC Form 4 insider activity, earnings and anomaly flags, and a combined score for each ticker.
 2. **Research phase.** Anthropic-backed agents may run up to three live web searches before deciding. Whether to search is part of the persona.
-3. **Decide.** The LLM reads its persona, its recent journal entries, its standing orders, any fills that happened while it slept, the quant signal cards and its research notes. It returns a schema-validated `TradeDecision`: orders, conditional orders, wake triggers, its next wake-up time, a watchlist update and a new journal entry.
+3. **Decide.** The LLM reads its persona, its recent journal entries, its standing orders, any fills that happened while it slept, the quant signal cards and its research notes. It returns a `TradeDecision` whose JSON shape is guaranteed by the API's structured outputs: orders, conditional orders, wake triggers, its next wake-up time, a watchlist update and a new journal entry.
 4. **Execute.** Orders fill at the same cycle-consistent price the agent saw. Only physical constraints are enforced: cash cannot go negative, there is no shorting, and an agent cannot sell shares it doesn't hold. Realistic costs are always applied:
    - TW: 0.1425% commission plus 0.3% securities tax on sells
    - US: 5 bps slippage plus the SEC fee
@@ -48,19 +48,21 @@ flowchart LR
 
 ## The agents
 
-| Persona | US agent | TW agent | Model | Philosophy |
+| Persona | US agent | TW agent | Model (Season 3) | Philosophy |
 |---|---|---|---|---|
-| 🧓 Value | Warren AI | 巴菲特AI | Claude Opus | Economic moats, margin of safety, patience |
-| 🚀 Innovation | Cathie AI | 女股神AI | Claude Sonnet | Concentrated bets on disruptive technology |
-| ⚡ Momentum | Momentum Bot | 動能機器人 | GPT-5.4 | Chase breakouts, cut losers fast |
-| ⚖️ Balanced | Risk Parity | 風險平衡 | Claude Sonnet | Diversified, volatility-aware allocation |
-| 🤖 Quant | Quant Engine | 量化引擎 | GPT-5.4 | Signals only, no narrative |
+| 🧓 Value | Warren AI | 巴菲特AI | Claude Opus 5.5 | Economic moats, margin of safety, patience |
+| 🚀 Innovation | Cathie AI | 女股神AI | Claude Sonnet 5.5 | Concentrated bets on disruptive technology |
+| ⚡ Momentum | Momentum Bot | 動能機器人 | GPT-6.1 Sol | Chase breakouts, cut losers fast |
+| ⚖️ Balanced | Risk Parity | 風險平衡 | Claude Sonnet 5.5 | Diversified, volatility-aware allocation |
+| 🤖 Quant | Quant Engine | 量化引擎 | GPT-6.1 Sol | Signals only, no narrative |
 
-## Season 1 → Season 2: from managed employees to autonomous traders
+All models run at medium thinking / reasoning effort, so no agent gets a deeper "think" budget than another.
+
+## Seasons: from managed employees to autonomous traders
 
 The experiment runs in **seasons**. Each season resets capital and keeps the previous season's data as a baseline.
 
-| | Season 1 (Apr–Jul 2026) | Season 2 "Soul Agents" (Jul 2026–present) |
+| | Season 1 (Apr–Jul 2026) | Season 2+ "Soul Agents" (Jul 2026–present) |
 |---|---|---|
 | **When agents act** | Fixed polling every 15, 30 or 60 min | Agents choose their own next wake-up (15 min to 48 h) and set price-based wake triggers |
 | **Trading pressure** | Prompts required 40–60% of capital to be invested | No pressure: agents may hold cash all season or go all-in |
@@ -72,24 +74,28 @@ The experiment runs in **seasons**. Each season resets capital and keeps the pre
 
 **Why change?** In Season 1, the forced-trading prompts and external guardrails pushed all ten personas toward the same mediocre high-turnover behaviour. Results without costs also overstated returns. Season 2 asks what each agent does when the choices are its own. Design rationale is in [`DECISIONS.md`](DECISIONS.md).
 
+**Season 3 (2026-10-20 → present)** keeps the Season 2 design. It fixes a bug that made most Claude Opus decisions fail in Season 2 (see below) and upgrades every agent to the newest model in its tier: Claude Opus 4.8 → Opus 5.5, Claude Sonnet 5 → Sonnet 5.5, GPT-5.4 → GPT-6.1 Sol. Live Season 3 standings are on the [dashboard](https://ai-trader-web.fly.dev).
+
 ## Results
 
-### Season 2: autonomous agents, real costs (2026-07-09 → 2026-10-13, 96 days)
+### Season 2: autonomous agents, real costs (2026-07-09 → 2026-10-19, final)
 
-| Agent | Model | Return | vs. benchmark | Trades |
-|---|---|---:|---:|---:|
-| Warren AI | Claude Opus | **+9.3%** | **+5.5 pp** | 2 |
-| Cathie AI | Claude Sonnet | +5.3% | +1.5 pp | 11 |
-| Quant Engine | GPT-5.4 | +2.5% | −1.3 pp | 2 |
-| Momentum Bot | GPT-5.4 | −0.9% | −4.7 pp | 6 |
-| Risk Parity | Claude Sonnet | −6.6% | −10.4 pp | 29 |
-| *SPY (buy & hold)* | | *+3.8%* | | |
-| 動能機器人 | GPT-5.4 | **+23.0%** | **+14.0 pp** | 10 |
-| 女股神AI | Claude Sonnet | +15.9% | +6.9 pp | 9 |
-| 風險平衡 | Claude Sonnet | +10.9% | +1.9 pp | 25 |
-| 巴菲特AI | Claude Opus | +2.7% | −6.3 pp | 1 |
-| 量化引擎 | GPT-5.4 | −7.6% | −16.6 pp | 15 |
-| *0050.TW (buy & hold)* | | *+9.0%* | | |
+| Agent | Model | Return | vs. benchmark | Trades | Decisions |
+|---|---|---:|---:|---:|---:|
+| Warren AI | Claude Opus 4.8 | **+7.5%** | **+5.6 pp** | 2 | 31² |
+| Cathie AI | Claude Sonnet 5 | +3.1% | +1.1 pp | 11 | 58 |
+| Quant Engine | GPT-5.4 | +1.6% | −0.3 pp | 3 | 133 |
+| Momentum Bot | GPT-5.4 | −0.9% | −2.9 pp | 6 | 156 |
+| Risk Parity | Claude Sonnet 5 | −6.5% | −8.4 pp | 31 | 81 |
+| *SPY (buy & hold)* | | *+2.0%* | | | |
+| 動能機器人 | GPT-5.4 | **+19.4%** | **+17.4 pp** | 10 | 255 |
+| 風險平衡 | Claude Sonnet 5 | +11.3% | +9.3 pp | 25 | 62 |
+| 女股神AI | Claude Sonnet 5 | +11.1% | +9.1 pp | 9 | 40 |
+| 巴菲特AI | Claude Opus 4.8 | +3.2% | +1.2 pp | 1 | 27² |
+| 量化引擎 | GPT-5.4 | −3.3% | −5.3 pp | 15 | 150 |
+| *0050.TW (buy & hold)* | | *+2.0%* | | | |
+
+² Most Claude Opus decision attempts failed in Season 2 because of a schema bug, so these two agents decided far less often than they tried to. Their low trade counts are partly the bug, not only patience. Fixed for Season 3.
 
 ### Season 1: managed agents, no costs simulated (2026-04-01 → 2026-07-08)
 
@@ -110,13 +116,13 @@ The experiment runs in **seasons**. Each season resets capital and keeps the pre
 
 ### What we've learned so far
 
-- **Freedom made agents selective.** Turnover fell by about 99%, from 13,224 trades in Season 1 to 110 in a similar-length Season 2. Several agents now spend weeks in cash.
+- **Freedom made agents selective.** Turnover fell by about 99%, from 13,224 trades in Season 1 to 113 in a similar-length Season 2. Several agents spent weeks in cash.
 - **Costs decide winners.** In Season 1 the high-turnover Taiwan agents would have paid 39–49% of starting capital in fees. 量化引擎 showed +40% on paper and about −9% after costs.
-- **More agents beat their benchmark after costs:** 5 of 10 in Season 2, compared with an estimated 3 of 10 in Season 1.
-- **Thinking isn't free.** LLM spend since cost tracking began with Season 2 is about **$407**, roughly $127 a month. That equals about 45% of the five US agents' combined paper profit of about $909.
+- **More agents beat their benchmark after costs:** 6 of 10 in Season 2, compared with an estimated 3 of 10 in Season 1.
+- **Reliability is a cost line.** Season 2 spent about **$371** on LLM calls, roughly $25 a week. In its last four weeks, about 58% of that went to failed Claude decisions that were retried every hour. Grammar-constrained structured outputs remove that failure mode in Season 3.
 
 > [!NOTE]
-> These are small samples: one market regime, about three months per season, and 1–29 trades per agent. Treat them as early observations, not evidence of skill. Live numbers are on the [dashboard](https://ai-trader-web.fly.dev).
+> These are small samples: one market regime, about three months per season, and 1–31 trades per agent. Treat them as early observations, not evidence of skill. Live numbers are on the [dashboard](https://ai-trader-web.fly.dev).
 
 ## Architecture
 
@@ -125,7 +131,7 @@ The experiment runs in **seasons**. Each season resets capital and keeps the pre
 | Backend | Python 3.13, FastAPI, APScheduler |
 | Market data | yfinance (prices, fundamentals, SEC Form 4 insider data), Google News RSS |
 | Quant | NumPy, SciPy, hmmlearn, exchange-calendars |
-| LLMs | Anthropic and OpenAI SDKs (no LangChain); tool-use / JSON-schema structured output |
+| LLMs | Anthropic and OpenAI SDKs (no LangChain); grammar-constrained JSON-schema structured outputs |
 | Storage | SQLite in WAL mode on a Fly.io persistent volume |
 | Frontend | Next.js 16, React 19, Tailwind CSS 4, shadcn/ui, Recharts |
 | Hosting | Fly.io (`ai-trader-api`, `ai-trader-web`) |
